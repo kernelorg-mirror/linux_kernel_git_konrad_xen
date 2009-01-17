@@ -70,16 +70,12 @@ void exit_thread(void)
 	unsigned long *bp = t->io_bitmap_ptr;
 
 	if (bp) {
-		struct tss_struct *tss = &per_cpu(init_tss, get_cpu());
-
+		preempt_disable();
 		t->io_bitmap_ptr = NULL;
 		clear_thread_flag(TIF_IO_BITMAP);
-		/*
-		 * Careful, clear this in the TSS too:
-		 */
-		memset(tss->io_bitmap, 0xff, t->io_bitmap_max);
+		set_io_bitmap(t, t->io_bitmap_max);
 		t->io_bitmap_max = 0;
-		put_cpu();
+		preempt_enable();
 		kfree(bp);
 	}
 }
@@ -216,19 +212,11 @@ void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p,
 			hard_enable_TSC();
 	}
 
-	if (test_tsk_thread_flag(next_p, TIF_IO_BITMAP)) {
-		/*
-		 * Copy the relevant range of the IO bitmap.
-		 * Normally this is 128 bytes or less:
-		 */
-		memcpy(tss->io_bitmap, next->io_bitmap_ptr,
-		       max(prev->io_bitmap_max, next->io_bitmap_max));
-	} else if (test_tsk_thread_flag(prev_p, TIF_IO_BITMAP)) {
-		/*
-		 * Clear any possible leftover bits:
-		 */
-		memset(tss->io_bitmap, 0xff, prev->io_bitmap_max);
-	}
+	if (test_tsk_thread_flag(next_p, TIF_IO_BITMAP) ||
+	    test_tsk_thread_flag(prev_p, TIF_IO_BITMAP))
+		set_io_bitmap(next,
+			      max(prev->io_bitmap_max, next->io_bitmap_max));
+
 	propagate_user_return_notify(prev_p, next_p);
 }
 
