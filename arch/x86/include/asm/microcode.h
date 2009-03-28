@@ -71,4 +71,13 @@ static inline int __init save_microcode_in_initrd(void)
 }
 #endif
 
+#ifdef CONFIG_MICROCODE_XEN
+extern struct microcode_ops * __init init_xen_microcode(void);
+#else
+static inline struct microcode_ops * __init init_xen_microcode(void)
+{
+	return NULL;
+}
+#endif
+
 #endif /* _ASM_X86_MICROCODE_H */
