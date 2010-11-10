@@ -586,7 +586,10 @@ static inline void load_sp0(struct tss_struct *tss,
 	native_load_sp0(tss, thread);
 }
 
-#define set_iopl_mask native_set_iopl_mask
+static inline void set_iopl_mask(unsigned mask)
+{
+	native_set_iopl_mask(mask);
+}
 #endif /* CONFIG_PARAVIRT */
 
 /*
