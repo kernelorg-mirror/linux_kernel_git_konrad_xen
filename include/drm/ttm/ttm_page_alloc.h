@@ -36,7 +36,7 @@
  * @flags: ttm flags for page allocation.
  * @cstate: ttm caching state for the page.
  * @count: number of pages to allocate.
- * @dma_address: The DMA (bus) address of pages (if TTM_PAGE_FLAG_DMA32 set).
+ * @dma_address: The DMA (bus) address of pages - (by default zero).
  */
 int ttm_get_pages(struct list_head *pages,
 		  int flags,
@@ -51,7 +51,7 @@ int ttm_get_pages(struct list_head *pages,
  * count.
  * @flags: ttm flags for page allocation.
  * @cstate: ttm caching state.
- * @dma_address: The DMA (bus) address of pages (if TTM_PAGE_FLAG_DMA32 set).
+ * @dma_address: The DMA (bus) address of pages (by default zero).
  */
 void ttm_put_pages(struct list_head *pages,
 		   unsigned page_count,
