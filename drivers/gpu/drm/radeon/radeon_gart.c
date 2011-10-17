@@ -181,9 +181,7 @@ int radeon_gart_bind(struct radeon_device *rdev, unsigned offset,
 	p = t / (PAGE_SIZE / RADEON_GPU_PAGE_SIZE);
 
 	for (i = 0; i < pages; i++, p++) {
-		/* we reverted the patch using dma_addr in TTM for now but this
-		 * code stops building on alpha so just comment it out for now */
-		if (0) { /*dma_addr[i] != DMA_ERROR_CODE) */
+		if (dma_addr[i] != 0) {
 			rdev->gart.ttm_alloced[p] = true;
 			rdev->gart.pages_addr[p] = dma_addr[i];
 		} else {
