@@ -660,13 +660,16 @@ out:
 	return count;
 }
 
+static void __ttm_put_pages(struct list_head *pages, unsigned page_count,
+			    int flags, enum ttm_caching_state cstate,
+			    dma_addr_t *dma_address);
 /*
  * On success pages list will hold count number of correctly
  * cached pages.
  */
-int ttm_get_pages(struct list_head *pages, int flags,
-		  enum ttm_caching_state cstate, unsigned count,
-		  dma_addr_t *dma_address)
+static int __ttm_get_pages(struct list_head *pages, int flags,
+			   enum ttm_caching_state cstate, unsigned count,
+			   dma_addr_t *dma_address)
 {
 	struct ttm_page_pool *pool = ttm_get_pool(flags, cstate);
 	struct page *p = NULL;
@@ -724,7 +727,7 @@ int ttm_get_pages(struct list_head *pages, int flags,
 			printk(KERN_ERR TTM_PFX
 			       "Failed to allocate extra pages "
 			       "for large request.");
-			ttm_put_pages(pages, 0, flags, cstate, NULL);
+			__ttm_put_pages(pages, 0, flags, cstate, NULL);
 			return r;
 		}
 	}
@@ -734,8 +737,9 @@ int ttm_get_pages(struct list_head *pages, int flags,
 }
 
 /* Put all pages in pages list to correct pool to wait for reuse */
-void ttm_put_pages(struct list_head *pages, unsigned page_count, int flags,
-		   enum ttm_caching_state cstate, dma_addr_t *dma_address)
+static void __ttm_put_pages(struct list_head *pages, unsigned page_count,
+			    int flags, enum ttm_caching_state cstate,
+			    dma_addr_t *dma_address)
 {
 	unsigned long irq_flags;
 	struct ttm_page_pool *pool = ttm_get_pool(flags, cstate);
@@ -857,3 +861,16 @@ int ttm_page_alloc_debugfs(struct seq_file *m, void *data)
 	return 0;
 }
 EXPORT_SYMBOL(ttm_page_alloc_debugfs);
+int ttm_get_pages(struct ttm_tt *ttm, struct list_head *pages,
+		  unsigned count, dma_addr_t *dma_address)
+{
+	return __ttm_get_pages(pages, ttm->page_flags, ttm->caching_state,
+				count, dma_address);
+}
+{
+void ttm_put_pages(struct ttm_tt *ttm, struct list_head *pages,
+		   unsigned page_count, dma_addr_t *dma_address)
+{
+	__ttm_put_pages(pages, page_count, ttm->page_flags, ttm->caching_state,
+			dma_address);
+}
