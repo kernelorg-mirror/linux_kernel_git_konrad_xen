@@ -32,31 +32,27 @@
 /**
  * Get count number of pages from pool to pages list.
  *
+ * @ttm: ttm which contains flags for page allocation and caching state.
  * @pages: heado of empty linked list where pages are filled.
- * @flags: ttm flags for page allocation.
- * @cstate: ttm caching state for the page.
  * @count: number of pages to allocate.
  * @dma_address: The DMA (bus) address of pages - (by default zero).
  */
-int ttm_get_pages(struct list_head *pages,
-		  int flags,
-		  enum ttm_caching_state cstate,
+int ttm_get_pages(struct ttm_tt *ttm,
+		  struct list_head *pages,
 		  unsigned count,
 		  dma_addr_t *dma_address);
 /**
  * Put linked list of pages to pool.
  *
+ * @ttm: ttm which contains flags for page allocation and caching state.
  * @pages: list of pages to free.
  * @page_count: number of pages in the list. Zero can be passed for unknown
  * count.
- * @flags: ttm flags for page allocation.
- * @cstate: ttm caching state.
  * @dma_address: The DMA (bus) address of pages (by default zero).
  */
-void ttm_put_pages(struct list_head *pages,
+void ttm_put_pages(struct ttm_tt *ttm,
+		   struct list_head *pages,
 		   unsigned page_count,
-		   int flags,
-		   enum ttm_caching_state cstate,
 		   dma_addr_t *dma_address);
 /**
  * Initialize pool allocator.
