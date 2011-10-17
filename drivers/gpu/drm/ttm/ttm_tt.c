@@ -276,7 +276,7 @@ int ttm_tt_set_placement_caching(struct ttm_tt *ttm, uint32_t placement)
 }
 EXPORT_SYMBOL(ttm_tt_set_placement_caching);
 
-static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm)
+static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm, bool call_clear)
 {
 	int i;
 	unsigned count = 0;
@@ -286,7 +286,7 @@ static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm)
 
 	INIT_LIST_HEAD(&h);
 
-	if (be)
+	if (be && call_clear)
 		be->func->clear(be);
 	for (i = 0; i < ttm->num_pages; ++i) {
 
@@ -317,16 +317,14 @@ void ttm_tt_destroy(struct ttm_tt *ttm)
 		return;
 
 	be = ttm->be;
-	if (likely(be != NULL)) {
+	if (likely(be != NULL))
 		be->func->destroy(be);
-		ttm->be = NULL;
-	}
 
 	if (likely(ttm->pages != NULL)) {
 		if (ttm->page_flags & TTM_PAGE_FLAG_USER)
 			ttm_tt_free_user_pages(ttm);
 		else
-			ttm_tt_free_alloced_pages(ttm);
+			ttm_tt_free_alloced_pages(ttm, false);
 
 		ttm_tt_free_page_directory(ttm);
 	}
@@ -335,6 +333,7 @@ void ttm_tt_destroy(struct ttm_tt *ttm)
 	    ttm->swap_storage)
 		fput(ttm->swap_storage);
 
+	ttm->be = NULL;
 	kfree(ttm);
 }
 
@@ -509,7 +508,7 @@ static int ttm_tt_swapin(struct ttm_tt *ttm)
 
 	return 0;
 out_err:
-	ttm_tt_free_alloced_pages(ttm);
+	ttm_tt_free_alloced_pages(ttm, true);
 	return ret;
 }
 
@@ -573,7 +572,7 @@ int ttm_tt_swapout(struct ttm_tt *ttm, struct file *persistent_swap_storage)
 		page_cache_release(to_page);
 	}
 
-	ttm_tt_free_alloced_pages(ttm);
+	ttm_tt_free_alloced_pages(ttm, true);
 	ttm->swap_storage = swap_storage;
 	ttm->page_flags |= TTM_PAGE_FLAG_SWAPPED;
 	if (persistent_swap_storage)
