@@ -2,6 +2,7 @@
 #include "nouveau_drv.h"
 #include <linux/pagemap.h>
 #include <linux/slab.h>
+#include <ttm/ttm_page_alloc.h>
 
 #define NV_CTXDMA_PAGE_SHIFT 12
 #define NV_CTXDMA_PAGE_SIZE  (1 << NV_CTXDMA_PAGE_SHIFT)
@@ -417,6 +418,10 @@ nouveau_sgdma_init_ttm(struct drm_device *dev)
 	nvbe->dev = dev;
 
 	nvbe->backend.func = dev_priv->gart_info.func;
+	if ((dev->dev) && (dma_get_mask(dev->dev) <= DMA_BIT_MASK(32))) {
+		if (ttm_dma_override(nvbe->backend.func))
+			nvbe->backend.dev = dev->dev;
+	}
 	return &nvbe->backend;
 }
 
