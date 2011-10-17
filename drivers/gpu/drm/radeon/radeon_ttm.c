@@ -761,6 +761,10 @@ struct ttm_backend *radeon_ttm_backend_create(struct radeon_device *rdev)
 	gtt->backend.bdev = &rdev->mman.bdev;
 	gtt->backend.flags = 0;
 	gtt->backend.func = &radeon_backend_func;
+	if (rdev->need_dma32) {
+		if (ttm_dma_override(gtt->backend.func))
+			gtt->backend.dev = rdev->dev;
+	}
 	gtt->rdev = rdev;
 	gtt->pages = NULL;
 	gtt->num_pages = 0;
@@ -792,8 +796,8 @@ static int radeon_mm_dump_table(struct seq_file *m, void *data)
 static int radeon_ttm_debugfs_init(struct radeon_device *rdev)
 {
 #if defined(CONFIG_DEBUG_FS)
-	static struct drm_info_list radeon_mem_types_list[RADEON_DEBUGFS_MEM_TYPES+1];
-	static char radeon_mem_types_names[RADEON_DEBUGFS_MEM_TYPES+1][32];
+	static struct drm_info_list radeon_mem_types_list[RADEON_DEBUGFS_MEM_TYPES+2];
+	static char radeon_mem_types_names[RADEON_DEBUGFS_MEM_TYPES+2][32];
 	unsigned i;
 
 	for (i = 0; i < RADEON_DEBUGFS_MEM_TYPES; i++) {
@@ -815,8 +819,15 @@ static int radeon_ttm_debugfs_init(struct radeon_device *rdev)
 	radeon_mem_types_list[i].name = radeon_mem_types_names[i];
 	radeon_mem_types_list[i].show = &ttm_page_alloc_debugfs;
 	radeon_mem_types_list[i].driver_features = 0;
-	radeon_mem_types_list[i].data = NULL;
-	return radeon_debugfs_add_files(rdev, radeon_mem_types_list, RADEON_DEBUGFS_MEM_TYPES+1);
+	radeon_mem_types_list[i++].data = NULL;
+	if (rdev->need_dma32) {
+		sprintf(radeon_mem_types_names[i], "ttm_dma_page_pool");
+		radeon_mem_types_list[i].name = radeon_mem_types_names[i];
+		radeon_mem_types_list[i].show = &ttm_dma_page_alloc_debugfs;
+		radeon_mem_types_list[i].driver_features = 0;
+		radeon_mem_types_list[i++].data = NULL;
+	}
+	return radeon_debugfs_add_files(rdev, radeon_mem_types_list, i);
 
 #endif
 	return 0;
