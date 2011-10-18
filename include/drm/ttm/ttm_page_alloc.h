@@ -32,6 +32,7 @@
 #ifdef CONFIG_SWIOTLB
 extern bool ttm_dma_override(struct ttm_backend_func *be);
 
+extern int ttm_dma_disable;
 /**
  * Initialize pool allocator.
  */
@@ -45,6 +46,7 @@ void ttm_dma_page_alloc_fini(void);
  */
 extern int ttm_dma_page_alloc_debugfs(struct seq_file *m, void *data);
 #else
+#define ttm_dma_disable (1)
 static inline bool ttm_dma_override(struct ttm_backend_func *be)
 {
 	return false;
