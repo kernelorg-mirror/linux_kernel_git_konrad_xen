@@ -660,9 +660,48 @@ out:
 	return count;
 }
 
+/* Put all pages in pages list to correct pool to wait for reuse */
 static void __ttm_put_pages(struct list_head *pages, unsigned page_count,
 			    int flags, enum ttm_caching_state cstate,
-			    dma_addr_t *dma_address);
+			    dma_addr_t *dma_address)
+{
+	unsigned long irq_flags;
+	struct ttm_page_pool *pool = ttm_get_pool(flags, cstate);
+	struct page *p, *tmp;
+
+	if (pool == NULL) {
+		/* No pool for this memory type so free the pages */
+
+		list_for_each_entry_safe(p, tmp, pages, lru) {
+			__free_page(p);
+		}
+		/* Make the pages list empty */
+		INIT_LIST_HEAD(pages);
+		return;
+	}
+	if (page_count == 0) {
+		list_for_each_entry_safe(p, tmp, pages, lru) {
+			++page_count;
+		}
+	}
+
+	spin_lock_irqsave(&pool->lock, irq_flags);
+	list_splice_init(pages, &pool->list);
+	pool->npages += page_count;
+	/* Check that we don't go over the pool limit */
+	page_count = 0;
+	if (pool->npages > _manager->options.max_size) {
+		page_count = pool->npages - _manager->options.max_size;
+		/* free at least NUM_PAGES_TO_ALLOC number of pages
+		 * to reduce calls to set_memory_wb */
+		if (page_count < NUM_PAGES_TO_ALLOC)
+			page_count = NUM_PAGES_TO_ALLOC;
+	}
+	spin_unlock_irqrestore(&pool->lock, irq_flags);
+	if (page_count)
+		ttm_page_pool_free(pool, page_count);
+}
+
 /*
  * On success pages list will hold count number of correctly
  * cached pages.
@@ -734,48 +773,6 @@ static int __ttm_get_pages(struct list_head *pages, int flags,
 
 
 	return 0;
-}
-
-/* Put all pages in pages list to correct pool to wait for reuse */
-static void __ttm_put_pages(struct list_head *pages, unsigned page_count,
-			    int flags, enum ttm_caching_state cstate,
-			    dma_addr_t *dma_address)
-{
-	unsigned long irq_flags;
-	struct ttm_page_pool *pool = ttm_get_pool(flags, cstate);
-	struct page *p, *tmp;
-
-	if (pool == NULL) {
-		/* No pool for this memory type so free the pages */
-
-		list_for_each_entry_safe(p, tmp, pages, lru) {
-			__free_page(p);
-		}
-		/* Make the pages list empty */
-		INIT_LIST_HEAD(pages);
-		return;
-	}
-	if (page_count == 0) {
-		list_for_each_entry_safe(p, tmp, pages, lru) {
-			++page_count;
-		}
-	}
-
-	spin_lock_irqsave(&pool->lock, irq_flags);
-	list_splice_init(pages, &pool->list);
-	pool->npages += page_count;
-	/* Check that we don't go over the pool limit */
-	page_count = 0;
-	if (pool->npages > _manager->options.max_size) {
-		page_count = pool->npages - _manager->options.max_size;
-		/* free at least NUM_PAGES_TO_ALLOC number of pages
-		 * to reduce calls to set_memory_wb */
-		if (page_count < NUM_PAGES_TO_ALLOC)
-			page_count = NUM_PAGES_TO_ALLOC;
-	}
-	spin_unlock_irqrestore(&pool->lock, irq_flags);
-	if (page_count)
-		ttm_page_pool_free(pool, page_count);
 }
 
 static void ttm_page_pool_init_locked(struct ttm_page_pool *pool, int flags,
