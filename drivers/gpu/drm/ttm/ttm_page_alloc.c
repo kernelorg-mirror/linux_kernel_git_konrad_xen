@@ -861,13 +861,17 @@ EXPORT_SYMBOL(ttm_page_alloc_debugfs);
 int ttm_get_pages(struct ttm_tt *ttm, struct list_head *pages,
 		  unsigned count, dma_addr_t *dma_address)
 {
+	if (ttm->be && ttm->be->func && ttm->be->func->get_pages)
+		return ttm->be->func->get_pages(ttm, pages, count, dma_address);
 	return __ttm_get_pages(pages, ttm->page_flags, ttm->caching_state,
 				count, dma_address);
 }
-{
 void ttm_put_pages(struct ttm_tt *ttm, struct list_head *pages,
 		   unsigned page_count, dma_addr_t *dma_address)
 {
-	__ttm_put_pages(pages, page_count, ttm->page_flags, ttm->caching_state,
-			dma_address);
+	if (ttm->be && ttm->be->func && ttm->be->func->put_pages)
+		ttm->be->func->put_pages(ttm, pages, page_count, dma_address);
+	else
+		__ttm_put_pages(pages, page_count, ttm->page_flags,
+				ttm->caching_state, dma_address);
 }
