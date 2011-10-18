@@ -51,6 +51,10 @@
 #include <asm/agp.h>
 #endif
 
+int __read_mostly ttm_dma_disable;
+MODULE_PARM_DESC(no_dma, "Disable TTM DMA pool");
+module_param_named(no_dma, ttm_dma_disable, bool, S_IRUGO);
+
 #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
 #define SMALL_ALLOCATION		16
 #define FREE_ALL_PAGES			(~0U)
@@ -1384,7 +1388,7 @@ int ttm_dma_page_alloc_debugfs(struct seq_file *m, void *data)
 EXPORT_SYMBOL_GPL(ttm_dma_page_alloc_debugfs);
 bool ttm_dma_override(struct ttm_backend_func *be)
 {
-	if (swiotlb_nr_tbl() && be) {
+	if (swiotlb_nr_tbl() && be && !ttm_dma_disable) {
 		be->get_pages = &ttm_dma_get_pages;
 		be->put_pages = &ttm_dma_put_pages;
 		return true;
