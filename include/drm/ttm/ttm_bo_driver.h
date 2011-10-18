@@ -100,6 +100,34 @@ struct ttm_backend_func {
 	 * Destroy the backend.
 	 */
 	void (*destroy) (struct ttm_backend *backend);
+
+	/**
+	 * ttm_get_pages override. The backend can override the default
+	 * TTM page pool code with a different one.
+	 *
+	 * Get count number of pages from pool to pages list.
+	 *
+	 * @ttm: ttm which contains flags for page allocation and caching state.
+	 * @pages: head of empty linked list where pages are filled.
+	 * @dma_address: The DMA (bus) address of pages
+	 */
+	int (*get_pages) (struct ttm_tt *ttm, struct list_head *pages,
+			  unsigned count, dma_addr_t *dma_address);
+
+	/**
+	 * ttm_put_pages override. The backend can override the default
+	 * TTM page pool code with a different implementation.
+	 *
+	 * Put linked list of pages to pool.
+	 *
+	 * @ttm: ttm which contains flags for page allocation and caching state.
+	 * @pages: list of pages to free.
+	 * @page_count: number of pages in the list. Zero can be passed for
+	 * unknown count.
+	 * @dma_address: The DMA (bus) address of pages
+	 */
+	void (*put_pages) (struct ttm_tt *ttm, struct list_head *pages,
+			   unsigned page_count, dma_addr_t *dma_address);
 };
 
 /**
@@ -109,6 +137,8 @@ struct ttm_backend_func {
  * @flags: For driver use.
  * @func: Pointer to a struct ttm_backend_func that describes
  * the backend methods.
+ * @dev: Pointer to a struct device which can be used by the TTM
+ *  [get|put)_pages overrides in 'struct ttm_backend_func'.
  *
  */
 
@@ -116,6 +146,7 @@ struct ttm_backend {
 	struct ttm_bo_device *bdev;
 	uint32_t flags;
 	struct ttm_backend_func *func;
+	struct device *dev;
 };
 
 #define TTM_PAGE_FLAG_USER            (1 << 1)
