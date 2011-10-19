@@ -34,6 +34,34 @@
 #define _XEN_ACPI_H
 
 #include <linux/types.h>
+#include <acpi/acpi_drivers.h>
+#include <acpi/processor.h>
+
+/*
+ * Following are interfaces for xen acpi processor control
+ */
+#if defined(CONFIG_ACPI_PROCESSOR_XEN) || \
+defined(CONFIG_ACPI_PROCESSOR_XEN_MODULE)
+/* Events notified to xen */
+#define PROCESSOR_PM_INIT	1
+#define PROCESSOR_PM_CHANGE	2
+#define PROCESSOR_HOTPLUG	3
+
+/* Objects for the PM events */
+#define PM_TYPE_IDLE		0
+#define PM_TYPE_PERF		1
+#define PM_TYPE_THR		2
+#define PM_TYPE_MAX		3
+
+#define XEN_MAX_ACPI_ID 255
+
+/* Processor hotplug events */
+#define HOTPLUG_TYPE_ADD	0
+#define HOTPLUG_TYPE_REMOVE	1
+
+extern int (*__acpi_processor_register_driver)(void);
+extern void (*__acpi_processor_unregister_driver)(void);
+#endif
 
 #ifdef CONFIG_XEN_DOM0
 #include <asm/xen/hypervisor.h>
@@ -66,5 +94,45 @@ static inline void xen_acpi_sleep_register(void)
 {
 }
 #endif
+
+
+
+#ifndef CONFIG_CPU_FREQ
+static inline int xen_acpi_processor_get_performance(struct acpi_processor *pr)
+{
+	printk(KERN_WARNING
+		"Warning: xen_acpi_processor_get_performance not supported\n"
+		"Consider compiling CPUfreq support into your kernel.\n");
+	return 0;
+}
+#endif
+
+#if defined(CONFIG_ACPI_PROCESSOR_XEN) || \
+defined(CONFIG_ACPI_PROCESSOR_XEN_MODULE)
+
+struct processor_cntl_xen_ops {
+	/* Transfer processor PM events to xen */
+int (*pm_ops[PM_TYPE_MAX])(struct acpi_processor *pr, int event);
+	/* Notify physical processor status to xen */
+	int (*hotplug)(struct acpi_processor *pr, int type);
+};
+
+extern int processor_cntl_xen_notify(struct acpi_processor *pr,
+			int event, int type);
+extern int processor_cntl_xen_power_cache(int cpu, int cx,
+		struct acpi_power_register *reg);
+#else
+
+static inline int processor_cntl_xen_notify(struct acpi_processor *pr,
+			int event, int type)
+{
+	return 0;
+}
+static inline int processor_cntl_xen_power_cache(int cpu, int cx,
+		struct acpi_power_register *reg)
+{
+	return 0;
+}
+#endif /* CONFIG_ACPI_PROCESSOR_XEN */
 
 #endif	/* _XEN_ACPI_H */
