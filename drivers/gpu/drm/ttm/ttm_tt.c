@@ -65,33 +65,25 @@ static void ttm_tt_free_page_directory(struct ttm_tt *ttm)
 static struct page *__ttm_tt_get_page(struct ttm_tt *ttm, int index)
 {
 	struct page *p;
-	struct list_head h;
 	struct ttm_mem_global *mem_glob = ttm->glob->mem_glob;
 	int ret;
 
 	if (NULL == (p = ttm->pages[index])) {
 
-		INIT_LIST_HEAD(&h);
-
-		ret = ttm_get_pages(&h, ttm->page_flags, ttm->caching_state, 1,
+		ret = ttm_get_pages(&ttm->pages[index], 1, ttm->page_flags,
+				    ttm->caching_state,
 				    &ttm->dma_address[index]);
-
 		if (ret != 0)
 			return NULL;
 
-		p = list_first_entry(&h, struct page, lru);
-
-		ret = ttm_mem_global_alloc_page(mem_glob, p, false, false);
+		ret = ttm_mem_global_alloc_pages(mem_glob, &ttm->pages[index],
+						 1, false, false);
 		if (unlikely(ret != 0))
 			goto out_err;
-
-		ttm->pages[index] = p;
 	}
 	return p;
 out_err:
-	INIT_LIST_HEAD(&h);
-	list_add(&p->lru, &h);
-	ttm_put_pages(&h, 1, ttm->page_flags,
+	ttm_put_pages(&ttm->pages[index], 1, ttm->page_flags,
 		      ttm->caching_state, &ttm->dma_address[index]);
 	return NULL;
 }
@@ -110,8 +102,7 @@ struct page *ttm_tt_get_page(struct ttm_tt *ttm, int index)
 
 int ttm_tt_populate(struct ttm_tt *ttm)
 {
-	struct page *page;
-	unsigned long i;
+	struct ttm_mem_global *mem_glob = ttm->glob->mem_glob;
 	struct ttm_backend *be;
 	int ret;
 
@@ -126,10 +117,16 @@ int ttm_tt_populate(struct ttm_tt *ttm)
 
 	be = ttm->be;
 
-	for (i = 0; i < ttm->num_pages; ++i) {
-		page = __ttm_tt_get_page(ttm, i);
-		if (!page)
-			return -ENOMEM;
+	ret = ttm_get_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
+			    ttm->caching_state, ttm->dma_address);
+	if (ret != 0)
+		return -ENOMEM;
+	ret = ttm_mem_global_alloc_pages(mem_glob, ttm->pages,
+					 ttm->num_pages, false, false);
+	if (unlikely(ret != 0)) {
+		ttm_put_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
+			      ttm->caching_state, ttm->dma_address);
+		return -ENOMEM;
 	}
 
 	be->func->populate(be, ttm->num_pages, ttm->pages,
@@ -242,33 +239,15 @@ EXPORT_SYMBOL(ttm_tt_set_placement_caching);
 
 static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm)
 {
-	int i;
-	unsigned count = 0;
-	struct list_head h;
-	struct page *cur_page;
 	struct ttm_backend *be = ttm->be;
-
-	INIT_LIST_HEAD(&h);
+	struct ttm_mem_global *glob = ttm->glob->mem_glob;
 
 	if (be)
 		be->func->clear(be);
-	for (i = 0; i < ttm->num_pages; ++i) {
 
-		cur_page = ttm->pages[i];
-		ttm->pages[i] = NULL;
-		if (cur_page) {
-			if (page_count(cur_page) != 1)
-				printk(KERN_ERR TTM_PFX
-				       "Erroneous page count. "
-				       "Leaking pages.\n");
-			ttm_mem_global_free_page(ttm->glob->mem_glob,
-						 cur_page);
-			list_add(&cur_page->lru, &h);
-			count++;
-		}
-	}
-	ttm_put_pages(&h, count, ttm->page_flags, ttm->caching_state,
-		      ttm->dma_address);
+	ttm_mem_global_free_pages(glob, ttm->pages, ttm->num_pages);
+	ttm_put_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
+			ttm->caching_state, ttm->dma_address);
 	ttm->state = tt_unpopulated;
 }
 

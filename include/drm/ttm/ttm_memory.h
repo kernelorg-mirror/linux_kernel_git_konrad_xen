@@ -150,10 +150,11 @@ extern int ttm_mem_global_alloc(struct ttm_mem_global *glob, uint64_t memory,
 				bool no_wait, bool interruptible);
 extern void ttm_mem_global_free(struct ttm_mem_global *glob,
 				uint64_t amount);
-extern int ttm_mem_global_alloc_page(struct ttm_mem_global *glob,
-				     struct page *page,
-				     bool no_wait, bool interruptible);
-extern void ttm_mem_global_free_page(struct ttm_mem_global *glob,
-				     struct page *page);
+extern int ttm_mem_global_alloc_pages(struct ttm_mem_global *glob,
+				      struct page **pages,
+				      unsigned npages,
+				      bool no_wait, bool interruptible);
+extern void ttm_mem_global_free_pages(struct ttm_mem_global *glob,
+				      struct page **pages, unsigned npages);
 extern size_t ttm_round_pot(size_t size);
 #endif

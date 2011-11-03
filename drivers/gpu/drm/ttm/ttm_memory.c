@@ -543,41 +543,53 @@ int ttm_mem_global_alloc(struct ttm_mem_global *glob, uint64_t memory,
 }
 EXPORT_SYMBOL(ttm_mem_global_alloc);
 
-int ttm_mem_global_alloc_page(struct ttm_mem_global *glob,
-			      struct page *page,
-			      bool no_wait, bool interruptible)
+int ttm_mem_global_alloc_pages(struct ttm_mem_global *glob,
+			       struct page **pages,
+			       unsigned npages,
+			       bool no_wait, bool interruptible)
 {
 
 	struct ttm_mem_zone *zone = NULL;
+	unsigned i;
+	int r;
 
 	/**
 	 * Page allocations may be registed in a single zone
 	 * only if highmem or !dma32.
 	 */
-
+	for (i = 0; i < npages; i++) {
 #ifdef CONFIG_HIGHMEM
-	if (PageHighMem(page) && glob->zone_highmem != NULL)
-		zone = glob->zone_highmem;
+		if (PageHighMem(pages[i]) && glob->zone_highmem != NULL)
+			zone = glob->zone_highmem;
 #else
-	if (glob->zone_dma32 && page_to_pfn(page) > 0x00100000UL)
-		zone = glob->zone_kernel;
+		if (glob->zone_dma32 && page_to_pfn(pages[i]) > 0x00100000UL)
+			zone = glob->zone_kernel;
 #endif
-	return ttm_mem_global_alloc_zone(glob, zone, PAGE_SIZE, no_wait,
-					 interruptible);
+		r = ttm_mem_global_alloc_zone(glob, zone, PAGE_SIZE, no_wait,
+					      interruptible);
+		if (r) {
+			return r;
+		}
+	}
+	return 0;
 }
 
-void ttm_mem_global_free_page(struct ttm_mem_global *glob, struct page *page)
+void ttm_mem_global_free_pages(struct ttm_mem_global *glob,
+			       struct page **pages, unsigned npages)
 {
 	struct ttm_mem_zone *zone = NULL;
+	unsigned i;
 
+	for (i = 0; i < npages; i++) {
 #ifdef CONFIG_HIGHMEM
-	if (PageHighMem(page) && glob->zone_highmem != NULL)
-		zone = glob->zone_highmem;
+		if (PageHighMem(pages[i]) && glob->zone_highmem != NULL)
+			zone = glob->zone_highmem;
 #else
-	if (glob->zone_dma32 && page_to_pfn(page) > 0x00100000UL)
-		zone = glob->zone_kernel;
+		if (glob->zone_dma32 && page_to_pfn(pages[i]) > 0x00100000UL)
+			zone = glob->zone_kernel;
 #endif
-	ttm_mem_global_free_zone(glob, zone, PAGE_SIZE);
+		ttm_mem_global_free_zone(glob, zone, PAGE_SIZE);
+	}
 }
 
 
