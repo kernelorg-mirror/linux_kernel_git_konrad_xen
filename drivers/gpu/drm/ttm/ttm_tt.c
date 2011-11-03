@@ -42,8 +42,6 @@
 #include "ttm/ttm_placement.h"
 #include "ttm/ttm_page_alloc.h"
 
-static int ttm_tt_swapin(struct ttm_tt *ttm);
-
 /**
  * Allocates storage for pointers to the pages that back the ttm.
  */
@@ -61,75 +59,6 @@ static void ttm_tt_free_page_directory(struct ttm_tt *ttm)
 	drm_free_large(ttm->dma_address);
 	ttm->dma_address = NULL;
 }
-
-static struct page *__ttm_tt_get_page(struct ttm_tt *ttm, int index)
-{
-	struct page *p;
-	struct ttm_mem_global *mem_glob = ttm->glob->mem_glob;
-	int ret;
-
-	if (NULL == (p = ttm->pages[index])) {
-
-		ret = ttm_get_pages(&ttm->pages[index], 1, ttm->page_flags,
-				    ttm->caching_state,
-				    &ttm->dma_address[index]);
-		if (ret != 0)
-			return NULL;
-
-		ret = ttm_mem_global_alloc_pages(mem_glob, &ttm->pages[index],
-						 1, false, false);
-		if (unlikely(ret != 0))
-			goto out_err;
-	}
-	return p;
-out_err:
-	ttm_put_pages(&ttm->pages[index], 1, ttm->page_flags,
-		      ttm->caching_state, &ttm->dma_address[index]);
-	return NULL;
-}
-
-struct page *ttm_tt_get_page(struct ttm_tt *ttm, int index)
-{
-	int ret;
-
-	if (unlikely(ttm->page_flags & TTM_PAGE_FLAG_SWAPPED)) {
-		ret = ttm_tt_swapin(ttm);
-		if (unlikely(ret != 0))
-			return NULL;
-	}
-	return __ttm_tt_get_page(ttm, index);
-}
-
-int ttm_tt_populate(struct ttm_tt *ttm)
-{
-	struct ttm_mem_global *mem_glob = ttm->glob->mem_glob;
-	int ret;
-
-	if (ttm->state != tt_unpopulated)
-		return 0;
-
-	if (unlikely(ttm->page_flags & TTM_PAGE_FLAG_SWAPPED)) {
-		ret = ttm_tt_swapin(ttm);
-		if (unlikely(ret != 0))
-			return ret;
-	}
-
-	ret = ttm_get_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
-			    ttm->caching_state, ttm->dma_address);
-	if (ret != 0)
-		return -ENOMEM;
-	ret = ttm_mem_global_alloc_pages(mem_glob, ttm->pages,
-					 ttm->num_pages, false, false);
-	if (unlikely(ret != 0)) {
-		ttm_put_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
-			      ttm->caching_state, ttm->dma_address);
-		return -ENOMEM;
-	}
-
-	ttm->state = tt_unbound;
-	return 0;
-}
-EXPORT_SYMBOL(ttm_tt_populate);
 
 #ifdef CONFIG_X86
 static inline int ttm_tt_set_page_caching(struct page *p,
@@ -232,23 +161,13 @@ int ttm_tt_set_placement_caching(struct ttm_tt *ttm, uint32_t placement)
 }
 EXPORT_SYMBOL(ttm_tt_set_placement_caching);
 
-static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm)
-{
-	struct ttm_mem_global *glob = ttm->glob->mem_glob;
-
-	ttm_mem_global_free_pages(glob, ttm->pages, ttm->num_pages);
-	ttm_put_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
-			ttm->caching_state, ttm->dma_address);
-	ttm->state = tt_unpopulated;
-}
-
 void ttm_tt_destroy(struct ttm_tt *ttm)
 {
 	if (unlikely(ttm == NULL))
 		return;
 
 	if (likely(ttm->pages != NULL)) {
-		ttm_tt_free_alloced_pages(ttm);
+		ttm->bdev->driver->ttm_tt_unpopulate(ttm);
 		ttm_tt_free_page_directory(ttm);
 	}
 
@@ -303,7 +222,7 @@ int ttm_tt_bind(struct ttm_tt *ttm, struct ttm_mem_reg *bo_mem)
 	if (ttm->state == tt_bound)
 		return 0;
 
-	ret = ttm_tt_populate(ttm);
+	ret = ttm->bdev->driver->ttm_tt_populate(ttm);
 	if (ret)
 		return ret;
 
@@ -317,7 +236,7 @@ int ttm_tt_bind(struct ttm_tt *ttm, struct ttm_mem_reg *bo_mem)
 }
 EXPORT_SYMBOL(ttm_tt_bind);
 
-static int ttm_tt_swapin(struct ttm_tt *ttm)
+int ttm_tt_swapin(struct ttm_tt *ttm)
 {
 	struct address_space *swap_space;
 	struct file *swap_storage;
@@ -331,6 +250,10 @@ static int ttm_tt_swapin(struct ttm_tt *ttm)
 	swap_storage = ttm->swap_storage;
 	BUG_ON(swap_storage == NULL);
 
+	ret = ttm->bdev->driver->ttm_tt_populate(ttm);
+	if (ret)
+		return ret;
+
 	swap_space = swap_storage->f_path.dentry->d_inode->i_mapping;
 
 	for (i = 0; i < ttm->num_pages; ++i) {
@@ -339,7 +262,7 @@ static int ttm_tt_swapin(struct ttm_tt *ttm)
 			ret = PTR_ERR(from_page);
 			goto out_err;
 		}
-		to_page = __ttm_tt_get_page(ttm, i);
+		to_page = ttm->pages[i];
 		if (unlikely(to_page == NULL))
 			goto out_err;
 
@@ -360,7 +283,7 @@ static int ttm_tt_swapin(struct ttm_tt *ttm)
 
 	return 0;
 out_err:
-	ttm_tt_free_alloced_pages(ttm);
+	ttm->bdev->driver->ttm_tt_unpopulate(ttm);
 	return ret;
 }
 
@@ -412,7 +335,7 @@ int ttm_tt_swapout(struct ttm_tt *ttm, struct file *persistent_swap_storage)
 		page_cache_release(to_page);
 	}
 
-	ttm_tt_free_alloced_pages(ttm);
+	ttm->bdev->driver->ttm_tt_unpopulate(ttm);
 	ttm->swap_storage = swap_storage;
 	ttm->page_flags |= TTM_PAGE_FLAG_SWAPPED;
 	if (persistent_swap_storage)

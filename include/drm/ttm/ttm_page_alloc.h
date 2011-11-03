@@ -67,6 +67,24 @@ int ttm_page_alloc_init(struct ttm_mem_global *glob, unsigned max_pages);
 void ttm_page_alloc_fini(void);
 
 /**
+ * ttm_page_alloc_ttm_tt_populate:
+ *
+ * @ttm: The struct ttm_tt to contain the backing pages.
+ *
+ * Add backing pages to all of @ttm
+ */
+extern int ttm_page_alloc_ttm_tt_populate(struct ttm_tt *ttm);
+
+/**
+ * ttm_page_alloc_ttm_tt_unpopulate:
+ *
+ * @ttm: The struct ttm_tt which to free backing pages.
+ *
+ * Free all pages of @ttm
+ */
+extern void ttm_page_alloc_ttm_tt_unpopulate(struct ttm_tt *ttm);
+
+/**
  * Output the state of pools to debugfs file
  */
 extern int ttm_page_alloc_debugfs(struct seq_file *m, void *data);
