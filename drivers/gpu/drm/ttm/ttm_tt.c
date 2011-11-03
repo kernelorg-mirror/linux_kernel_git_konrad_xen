@@ -103,7 +103,6 @@ struct page *ttm_tt_get_page(struct ttm_tt *ttm, int index)
 int ttm_tt_populate(struct ttm_tt *ttm)
 {
 	struct ttm_mem_global *mem_glob = ttm->glob->mem_glob;
-	struct ttm_backend *be;
 	int ret;
 
 	if (ttm->state != tt_unpopulated)
@@ -114,8 +113,6 @@ int ttm_tt_populate(struct ttm_tt *ttm)
 		if (unlikely(ret != 0))
 			return ret;
 	}
-
-	be = ttm->be;
 
 	ret = ttm_get_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
 			    ttm->caching_state, ttm->dma_address);
@@ -129,8 +126,6 @@ int ttm_tt_populate(struct ttm_tt *ttm)
 		return -ENOMEM;
 	}
 
-	be->func->populate(be, ttm->num_pages, ttm->pages,
-			   ttm->dummy_read_page, ttm->dma_address);
 	ttm->state = tt_unbound;
 	return 0;
 }
@@ -239,11 +234,7 @@ EXPORT_SYMBOL(ttm_tt_set_placement_caching);
 
 static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm)
 {
-	struct ttm_backend *be = ttm->be;
 	struct ttm_mem_global *glob = ttm->glob->mem_glob;
-
-	if (be)
-		be->func->clear(be);
 
 	ttm_mem_global_free_pages(glob, ttm->pages, ttm->num_pages);
 	ttm_put_pages(ttm->pages, ttm->num_pages, ttm->page_flags,
@@ -253,20 +244,11 @@ static void ttm_tt_free_alloced_pages(struct ttm_tt *ttm)
 
 void ttm_tt_destroy(struct ttm_tt *ttm)
 {
-	struct ttm_backend *be;
-
 	if (unlikely(ttm == NULL))
 		return;
 
-	be = ttm->be;
-	if (likely(be != NULL)) {
-		be->func->destroy(be);
-		ttm->be = NULL;
-	}
-
 	if (likely(ttm->pages != NULL)) {
 		ttm_tt_free_alloced_pages(ttm);
-
 		ttm_tt_free_page_directory(ttm);
 	}
 
@@ -274,52 +256,38 @@ void ttm_tt_destroy(struct ttm_tt *ttm)
 	    ttm->swap_storage)
 		fput(ttm->swap_storage);
 
-	kfree(ttm);
+	ttm->swap_storage = NULL;
+	ttm->func->destroy(ttm);
 }
 
-struct ttm_tt *ttm_tt_create(struct ttm_bo_device *bdev, unsigned long size,
-			     uint32_t page_flags, struct page *dummy_read_page)
+int ttm_tt_init(struct ttm_tt *ttm, struct ttm_bo_device *bdev,
+		unsigned long size, uint32_t page_flags,
+		struct page *dummy_read_page)
 {
-	struct ttm_bo_driver *bo_driver = bdev->driver;
-	struct ttm_tt *ttm;
-
-	if (!bo_driver)
-		return NULL;
-
-	ttm = kzalloc(sizeof(*ttm), GFP_KERNEL);
-	if (!ttm)
-		return NULL;
-
+	ttm->bdev = bdev;
 	ttm->glob = bdev->glob;
 	ttm->num_pages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	ttm->caching_state = tt_cached;
 	ttm->page_flags = page_flags;
-
 	ttm->dummy_read_page = dummy_read_page;
+	ttm->state = tt_unpopulated;
 
 	ttm_tt_alloc_page_directory(ttm);
 	if (!ttm->pages || !ttm->dma_address) {
 		ttm_tt_destroy(ttm);
 		printk(KERN_ERR TTM_PFX "Failed allocating page table\n");
-		return NULL;
+		return -ENOMEM;
 	}
-	ttm->be = bo_driver->create_ttm_backend_entry(bdev);
-	if (!ttm->be) {
-		ttm_tt_destroy(ttm);
-		printk(KERN_ERR TTM_PFX "Failed creating ttm backend entry\n");
-		return NULL;
-	}
-	ttm->state = tt_unpopulated;
-	return ttm;
+	return 0;
 }
+EXPORT_SYMBOL(ttm_tt_init);
 
 void ttm_tt_unbind(struct ttm_tt *ttm)
 {
 	int ret;
-	struct ttm_backend *be = ttm->be;
 
 	if (ttm->state == tt_bound) {
-		ret = be->func->unbind(be);
+		ret = ttm->func->unbind(ttm);
 		BUG_ON(ret);
 		ttm->state = tt_unbound;
 	}
@@ -328,7 +296,6 @@ void ttm_tt_unbind(struct ttm_tt *ttm)
 int ttm_tt_bind(struct ttm_tt *ttm, struct ttm_mem_reg *bo_mem)
 {
 	int ret = 0;
-	struct ttm_backend *be;
 
 	if (!ttm)
 		return -EINVAL;
@@ -336,13 +303,11 @@ int ttm_tt_bind(struct ttm_tt *ttm, struct ttm_mem_reg *bo_mem)
 	if (ttm->state == tt_bound)
 		return 0;
 
-	be = ttm->be;
-
 	ret = ttm_tt_populate(ttm);
 	if (ret)
 		return ret;
 
-	ret = be->func->bind(be, bo_mem);
+	ret = ttm->func->bind(ttm, bo_mem);
 	if (unlikely(ret != 0))
 		return ret;
 
