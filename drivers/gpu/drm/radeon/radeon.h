@@ -332,7 +332,6 @@ struct radeon_gart {
 	union radeon_gart_table		table;
 	struct page			**pages;
 	dma_addr_t			*pages_addr;
-	bool				*ttm_alloced;
 	bool				ready;
 };
 
