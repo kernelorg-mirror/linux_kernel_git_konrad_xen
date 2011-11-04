@@ -118,6 +118,10 @@ int radeon_audio = 0;
 int radeon_disp_priority = 0;
 int radeon_hw_i2c = 0;
 int radeon_pcie_gen2 = 0;
+int radeon_ttm_dma = 0;
+
+MODULE_PARM_DESC(ttm_dma, "Enable TTM DMA page pool always irregardless of DMA32 flag");
+module_param_named(ttm_dma, radeon_ttm_dma, int, 0444);
 
 MODULE_PARM_DESC(no_wb, "Disable AGP writeback for scratch registers");
 module_param_named(no_wb, radeon_no_wb, int, 0444);

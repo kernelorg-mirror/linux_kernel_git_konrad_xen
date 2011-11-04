@@ -593,7 +593,7 @@ static int radeon_ttm_tt_populate(struct ttm_tt *ttm)
 	rdev = radeon_get_rdev(ttm->bdev);
 
 #ifdef CONFIG_SWIOTLB
-	if (rdev->need_dma32 && swiotlb_nr_tbl()) {
+	if ((rdev->need_dma32 && swiotlb_nr_tbl()) || radeon_ttm_dma) {
 		return ttm_dma_populate(ttm, rdev->dev);
 	}
 #endif
@@ -628,7 +628,7 @@ static void radeon_ttm_tt_unpopulate(struct ttm_tt *ttm)
 	rdev = radeon_get_rdev(ttm->bdev);
 
 #ifdef CONFIG_SWIOTLB
-	if (rdev->need_dma32 && swiotlb_nr_tbl()) {
+	if ((rdev->need_dma32 && swiotlb_nr_tbl()) || radeon_ttm_dma) {
 		ttm_dma_unpopulate(ttm, rdev->dev);
 		return;
 	}
@@ -858,7 +858,7 @@ static int radeon_ttm_debugfs_init(struct radeon_device *rdev)
 	radeon_mem_types_list[i].driver_features = 0;
 	radeon_mem_types_list[i++].data = NULL;
 #ifdef CONFIG_SWIOTLB
-	if (rdev->need_dma32 && swiotlb_nr_tbl()) {
+	if ((rdev->need_dma32 && swiotlb_nr_tbl()) || radeon_ttm_dma) {
 		sprintf(radeon_mem_types_names[i], "ttm_dma_page_pool");
 		radeon_mem_types_list[i].name = radeon_mem_types_names[i];
 		radeon_mem_types_list[i].show = &ttm_dma_page_alloc_debugfs;
