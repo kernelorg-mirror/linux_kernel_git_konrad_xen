@@ -1064,9 +1064,8 @@ nouveau_ttm_tt_populate(struct ttm_tt *ttm)
 	dev = dev_priv->dev;
 
 #ifdef CONFIG_SWIOTLB
-	if (swiotlb_nr_tbl()) {
+	if (swiotlb_nr_tbl() && nouveau_ttm_dma)
 		return ttm_dma_populate(ttm, dev->dev);
-	}
 #endif
 
 	r = ttm_pool_populate(ttm);
@@ -1102,7 +1101,7 @@ nouveau_ttm_tt_unpopulate(struct ttm_tt *ttm)
 	dev = dev_priv->dev;
 
 #ifdef CONFIG_SWIOTLB
-	if (swiotlb_nr_tbl()) {
+	if (swiotlb_nr_tbl() && nouveau_ttm_dma) {
 		ttm_dma_unpopulate(ttm, dev->dev);
 		return;
 	}
