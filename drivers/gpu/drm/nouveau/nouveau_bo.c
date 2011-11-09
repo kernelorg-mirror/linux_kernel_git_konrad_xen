@@ -1052,6 +1052,7 @@ nouveau_bo_fence(struct nouveau_bo *nvbo, struct nouveau_fence *fence)
 static int
 nouveau_ttm_tt_populate(struct ttm_tt *ttm)
 {
+	struct ttm_dma_tt *ttm_dma = (void *)ttm;
 	struct drm_nouveau_private *dev_priv;
 	struct drm_device *dev;
 	unsigned i;
@@ -1065,7 +1066,7 @@ nouveau_ttm_tt_populate(struct ttm_tt *ttm)
 
 #ifdef CONFIG_SWIOTLB
 	if (swiotlb_nr_tbl() && nouveau_ttm_dma)
-		return ttm_dma_populate(ttm, dev->dev);
+		return ttm_dma_populate((void *)ttm, dev->dev);
 #endif
 
 	r = ttm_pool_populate(ttm);
@@ -1074,14 +1075,14 @@ nouveau_ttm_tt_populate(struct ttm_tt *ttm)
 	}
 
 	for (i = 0; i < ttm->num_pages; i++) {
-		ttm->dma_address[i] = pci_map_page(dev->pdev, ttm->pages[i],
+		ttm_dma->dma_address[i] = pci_map_page(dev->pdev, ttm->pages[i],
 						   0, PAGE_SIZE,
 						   PCI_DMA_BIDIRECTIONAL);
-		if (pci_dma_mapping_error(dev->pdev, ttm->dma_address[i])) {
+		if (pci_dma_mapping_error(dev->pdev, ttm_dma->dma_address[i])) {
 			while (--i) {
-				pci_unmap_page(dev->pdev, ttm->dma_address[i],
+				pci_unmap_page(dev->pdev, ttm_dma->dma_address[i],
 					       PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
-				ttm->dma_address[i] = 0;
+				ttm_dma->dma_address[i] = 0;
 			}
 			ttm_pool_unpopulate(ttm);
 			return -EFAULT;
@@ -1093,6 +1094,7 @@ nouveau_ttm_tt_populate(struct ttm_tt *ttm)
 static void
 nouveau_ttm_tt_unpopulate(struct ttm_tt *ttm)
 {
+	struct ttm_dma_tt *ttm_dma = (void *)ttm;
 	struct drm_nouveau_private *dev_priv;
 	struct drm_device *dev;
 	unsigned i;
@@ -1102,14 +1104,14 @@ nouveau_ttm_tt_unpopulate(struct ttm_tt *ttm)
 
 #ifdef CONFIG_SWIOTLB
 	if (swiotlb_nr_tbl() && nouveau_ttm_dma) {
-		ttm_dma_unpopulate(ttm, dev->dev);
+		ttm_dma_unpopulate((void *)ttm, dev->dev);
 		return;
 	}
 #endif
 
 	for (i = 0; i < ttm->num_pages; i++) {
-		if (ttm->dma_address[i]) {
-			pci_unmap_page(dev->pdev, ttm->dma_address[i],
+		if (ttm_dma->dma_address[i]) {
+			pci_unmap_page(dev->pdev, ttm_dma->dma_address[i],
 				       PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
 		}
 	}
