@@ -108,6 +108,12 @@ void acpi_os_delete_lock(acpi_spinlock handle);
 
 acpi_cpu_flags acpi_os_acquire_lock(acpi_spinlock handle);
 
+void acpi_os_prepare_sleep_register(acpi_status (*func)(u8 sleep_state,
+				    u32 pm1a_ctrl, u32 pm1b_ctrl));
+
+acpi_status acpi_os_prepare_sleep(u8 sleep_state, u32 pm1a_control,
+				  u32 pm1b_control);
+
 void acpi_os_release_lock(acpi_spinlock handle, acpi_cpu_flags flags);
 
 /*

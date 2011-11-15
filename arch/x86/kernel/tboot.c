@@ -31,6 +31,7 @@
 #include <linux/pfn.h>
 #include <linux/mm.h>
 #include <linux/tboot.h>
+#include <acpi/acpiosxf.h>
 
 #include <asm/trampoline.h>
 #include <asm/processor.h>
@@ -297,6 +298,12 @@ void tboot_sleep(u8 sleep_state, u32 pm1a_control, u32 pm1b_control)
 
 	tboot_shutdown(acpi_shutdown_map[sleep_state]);
 }
+static acpi_status tboot_sleep_wrapper(u8 sleep_state, u32 pm1a_control,
+		u32 pm1b_control)
+{
+	tboot_sleep(sleep_state, pm1a_control, pm1b_control);
+	return AE_OK;
+}
 
 static atomic_t ap_wfs_count;
 
@@ -345,6 +352,8 @@ static __init int tboot_late_init(void)
 
 	atomic_set(&ap_wfs_count, 0);
 	register_hotcpu_notifier(&tboot_cpu_notifier);
+
+	acpi_os_prepare_sleep_register(&tboot_sleep_wrapper);
 	return 0;
 }
 

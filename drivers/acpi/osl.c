@@ -1659,3 +1659,22 @@ acpi_status acpi_os_terminate(void)
 
 	return AE_OK;
 }
+
+acpi_status (*__acpi_os_prepare_sleep)(u8 sleep_state, u32 pm1a_ctrl,
+				       u32 pm1b_ctrl);
+
+acpi_status acpi_os_prepare_sleep(u8 sleep_state, u32 pm1a_control,
+		u32 pm1b_control)
+{
+	if (__acpi_os_prepare_sleep)
+		return __acpi_os_prepare_sleep(sleep_state, pm1a_control,
+					       pm1b_control);
+	else
+		return	AE_OK;
+}
+
+void acpi_os_prepare_sleep_register(acpi_status (*func)(u8 sleep_state,
+		 u32 pm1a_ctrl,	u32 pm1b_ctrl))
+{
+	__acpi_os_prepare_sleep = func;
+}
