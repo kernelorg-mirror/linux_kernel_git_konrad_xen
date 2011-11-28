@@ -462,7 +462,7 @@ struct pv_mmu_ops pv_mmu_ops = {
 #endif
 #endif /* PAGETABLE_LEVELS >= 3 */
 
-	.pte_flags = native_pte_flags,
+	.pte_flags = PTE_IDENT,
 	.pte_val = PTE_IDENT,
 	.pgd_val = PTE_IDENT,
 

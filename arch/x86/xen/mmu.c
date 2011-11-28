@@ -1965,6 +1965,13 @@ void __init xen_ident_map_ISA(void)
 	xen_flush_tlb();
 }
 
+#if defined(CONFIG_X86_32) && !defined(CONFIG_X86_PAE)
+/* 32-bit pagetable entries */
+#define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_32)
+#else
+/* 64-bit pagetable entries */
+#define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_64)
+#endif
 static void __init xen_post_allocator_init(void)
 {
 	pv_mmu_ops.set_pte = xen_set_pte;
@@ -1986,7 +1993,7 @@ static void __init xen_post_allocator_init(void)
 #endif
 
 	if (!pat_enabled)
-		pv_mmu_ops.pte_flags = native_pte_flags;
+		pv_mmu_ops.pte_flags = PTE_IDENT;
 #ifdef CONFIG_X86_64
 	SetPagePinned(virt_to_page(level3_user_vsyscall));
 #endif
@@ -2035,7 +2042,7 @@ static const struct pv_mmu_ops xen_mmu_ops __initconst = {
 	.ptep_modify_prot_start = __ptep_modify_prot_start,
 	.ptep_modify_prot_commit = __ptep_modify_prot_commit,
 
-	.pte_flags = xen_pte_flags,
+	.pte_flags = __PV_IS_CALLEE_SAVE(xen_pte_flags),
 	.pte_val = PV_CALLEE_SAVE(xen_pte_val),
 	.pgd_val = PV_CALLEE_SAVE(xen_pgd_val),
 

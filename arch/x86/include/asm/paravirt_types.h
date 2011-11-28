@@ -288,7 +288,7 @@ struct pv_mmu_ops {
 	void (*ptep_modify_prot_commit)(struct mm_struct *mm, unsigned long addr,
 					pte_t *ptep, pte_t pte);
 
-	pteval_t (*pte_flags)(pte_t pte);
+	struct paravirt_callee_save pte_flags;
 	struct paravirt_callee_save pte_val;
 	struct paravirt_callee_save make_pte;
 
