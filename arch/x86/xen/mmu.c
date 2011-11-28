@@ -412,6 +412,16 @@ static pteval_t iomap_pte(pteval_t val)
 	return val;
 }
 
+static pteval_t xen_pte_flags(pte_t pte)
+{
+	pteval_t pteval = pte.pte;
+
+	/* If this is a WC pte, convert back from Xen WC to Linux WC */
+	if ((pteval & (_PAGE_PAT | _PAGE_PCD | _PAGE_PWT)) == _PAGE_PAT)
+		pteval = (pteval & ~_PAGE_PAT) | _PAGE_PWT;
+	return pteval;
+}
+
 static pteval_t xen_pte_val(pte_t pte)
 {
 	pteval_t pteval = pte.pte;
@@ -1975,6 +1985,8 @@ static void __init xen_post_allocator_init(void)
 	pv_mmu_ops.release_pud = xen_release_pud;
 #endif
 
+	if (!pat_enabled)
+		pv_mmu_ops.pte_flags = native_pte_flags;
 #ifdef CONFIG_X86_64
 	SetPagePinned(virt_to_page(level3_user_vsyscall));
 #endif
@@ -2023,6 +2035,7 @@ static const struct pv_mmu_ops xen_mmu_ops __initconst = {
 	.ptep_modify_prot_start = __ptep_modify_prot_start,
 	.ptep_modify_prot_commit = __ptep_modify_prot_commit,
 
+	.pte_flags = xen_pte_flags,
 	.pte_val = PV_CALLEE_SAVE(xen_pte_val),
 	.pgd_val = PV_CALLEE_SAVE(xen_pgd_val),
 

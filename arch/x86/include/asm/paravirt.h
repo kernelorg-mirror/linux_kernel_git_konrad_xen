@@ -462,6 +462,11 @@ static inline void pmd_update_defer(struct mm_struct *mm, unsigned long addr,
 	PVOP_VCALL3(pv_mmu_ops.pmd_update_defer, mm, addr, pmdp);
 }
 
+static inline pteval_t pte_flags(pte_t pte)
+{
+	return pv_mmu_ops.pte_flags(pte) & PTE_FLAGS_MASK;
+}
+
 static inline pte_t __pte(pteval_t val)
 {
 	pteval_t ret;

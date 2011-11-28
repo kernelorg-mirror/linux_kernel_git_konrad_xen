@@ -76,6 +76,7 @@ extern struct mm_struct *pgd_page_get_mm(struct page *page);
 #define __pmd(x)	native_make_pmd(x)
 #endif
 
+#define pte_flags(x)	(native_pte_val(x) & PTE_FLAGS_MASK)
 #define pte_val(x)	native_pte_val(x)
 #define __pte(x)	native_make_pte(x)
 
