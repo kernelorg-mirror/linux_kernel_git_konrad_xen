@@ -359,4 +359,11 @@ static inline int suspend_nvs_register(unsigned long a, unsigned long b)
 }
 #endif
 
+void acpi_os_set_prepare_sleep(int (*func)(u8 sleep_state,
+			       u32 pm1a_ctrl,  u32 pm1b_ctrl));
+
+acpi_status acpi_os_prepare_sleep(u8 sleep_state,
+				  u32 pm1a_control, u32 pm1b_control);
+
+
 #endif	/*_LINUX_ACPI_H*/
