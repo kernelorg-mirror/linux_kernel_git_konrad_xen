@@ -949,7 +949,7 @@ void ttm_dma_unpopulate(struct ttm_dma_tt *ttm_dma, struct device *dev)
 	struct dma_page *d_page, *next;
 	enum pool_type type;
 	bool is_cached = false;
-	unsigned count = 0, i;
+	unsigned count = 0, i, npages;
 	unsigned long irq_flags;
 
 	type = ttm_to_type(ttm->page_flags, ttm->caching_state);
@@ -971,11 +971,13 @@ void ttm_dma_unpopulate(struct ttm_dma_tt *ttm_dma, struct device *dev)
 	pool->npages_in_use -= count;
 	if (is_cached) {
 		pool->nfrees += count;
+		npages = count;
 	} else {
 		pool->npages_free += count;
 		list_splice(&ttm_dma->pages_list, &pool->free_list);
+		npages = count;
 		if (pool->npages_free > _manager->options.max_size) {
-			count = pool->npages_free - _manager->options.max_size;
+			npages = pool->npages_free - _manager->options.max_size;
 		}
 	}
 	spin_unlock_irqrestore(&pool->lock, irq_flags);
@@ -1000,8 +1002,8 @@ void ttm_dma_unpopulate(struct ttm_dma_tt *ttm_dma, struct device *dev)
 	}
 
 	/* shrink pool if necessary */
-	if (count)
-		ttm_dma_page_pool_free(pool, count);
+	if (npages)
+		ttm_dma_page_pool_free(pool, npages);
 	ttm->state = tt_unpopulated;
 }
 EXPORT_SYMBOL_GPL(ttm_dma_unpopulate);
