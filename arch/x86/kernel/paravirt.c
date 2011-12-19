@@ -403,10 +403,10 @@ struct pv_apic_ops pv_apic_ops = {
 
 #if defined(CONFIG_X86_32) && !defined(CONFIG_X86_PAE)
 /* 32-bit pagetable entries */
-#define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_32)
+#define PTE_IDENT	PV_IDENT_32
 #else
 /* 64-bit pagetable entries */
-#define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_64)
+#define PTE_IDENT	PV_IDENT_64
 #endif
 
 struct pv_mmu_ops pv_mmu_ops = {

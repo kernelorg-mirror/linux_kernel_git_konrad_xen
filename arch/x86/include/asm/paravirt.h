@@ -464,60 +464,27 @@ static inline void pmd_update_defer(struct mm_struct *mm, unsigned long addr,
 
 static inline pte_t __pte(pteval_t val)
 {
-	pteval_t ret;
-
-	if (sizeof(pteval_t) > sizeof(long))
-		ret = PVOP_CALLEE2(pteval_t,
-				   pv_mmu_ops.make_pte,
-				   val, (u64)val >> 32);
-	else
-		ret = PVOP_CALLEE1(pteval_t,
-				   pv_mmu_ops.make_pte,
-				   val);
-
-	return (pte_t) { .pte = ret };
+	return (pte_t) { .pte = PVOP_LIKELY_IDENT(pteval_t,
+						  pv_mmu_ops.make_pte,
+						  val) };
 }
 
 static inline pteval_t pte_val(pte_t pte)
 {
-	pteval_t ret;
-
-	if (sizeof(pteval_t) > sizeof(long))
-		ret = PVOP_CALLEE2(pteval_t, pv_mmu_ops.pte_val,
-				   pte.pte, (u64)pte.pte >> 32);
-	else
-		ret = PVOP_CALLEE1(pteval_t, pv_mmu_ops.pte_val,
-				   pte.pte);
-
-	return ret;
+	return PVOP_LIKELY_IDENT(pteval_t, pv_mmu_ops.pte_val,
+				 pte.pte);
 }
 
 static inline pgd_t __pgd(pgdval_t val)
 {
-	pgdval_t ret;
-
-	if (sizeof(pgdval_t) > sizeof(long))
-		ret = PVOP_CALLEE2(pgdval_t, pv_mmu_ops.make_pgd,
-				   val, (u64)val >> 32);
-	else
-		ret = PVOP_CALLEE1(pgdval_t, pv_mmu_ops.make_pgd,
-				   val);
-
-	return (pgd_t) { ret };
+	return (pgd_t) { PVOP_LIKELY_IDENT(pgdval_t, pv_mmu_ops.make_pgd,
+					   val) };
 }
 
 static inline pgdval_t pgd_val(pgd_t pgd)
 {
-	pgdval_t ret;
-
-	if (sizeof(pgdval_t) > sizeof(long))
-		ret =  PVOP_CALLEE2(pgdval_t, pv_mmu_ops.pgd_val,
-				    pgd.pgd, (u64)pgd.pgd >> 32);
-	else
-		ret =  PVOP_CALLEE1(pgdval_t, pv_mmu_ops.pgd_val,
-				    pgd.pgd);
-
-	return ret;
+	return PVOP_LIKELY_IDENT(pgdval_t, pv_mmu_ops.pgd_val,
+				 pgd.pgd);
 }
 
 #define  __HAVE_ARCH_PTEP_MODIFY_PROT_TRANSACTION
@@ -589,30 +556,14 @@ static inline void set_pmd(pmd_t *pmdp, pmd_t pmd)
 #if PAGETABLE_LEVELS >= 3
 static inline pmd_t __pmd(pmdval_t val)
 {
-	pmdval_t ret;
-
-	if (sizeof(pmdval_t) > sizeof(long))
-		ret = PVOP_CALLEE2(pmdval_t, pv_mmu_ops.make_pmd,
-				   val, (u64)val >> 32);
-	else
-		ret = PVOP_CALLEE1(pmdval_t, pv_mmu_ops.make_pmd,
-				   val);
-
-	return (pmd_t) { ret };
+	return (pmd_t) { PVOP_LIKELY_IDENT(pmdval_t, pv_mmu_ops.make_pmd,
+					   val) };
 }
 
 static inline pmdval_t pmd_val(pmd_t pmd)
 {
-	pmdval_t ret;
-
-	if (sizeof(pmdval_t) > sizeof(long))
-		ret =  PVOP_CALLEE2(pmdval_t, pv_mmu_ops.pmd_val,
-				    pmd.pmd, (u64)pmd.pmd >> 32);
-	else
-		ret =  PVOP_CALLEE1(pmdval_t, pv_mmu_ops.pmd_val,
-				    pmd.pmd);
-
-	return ret;
+	return PVOP_LIKELY_IDENT(pmdval_t, pv_mmu_ops.pmd_val,
+				 pmd.pmd);
 }
 
 static inline void set_pud(pud_t *pudp, pud_t pud)
@@ -629,30 +580,14 @@ static inline void set_pud(pud_t *pudp, pud_t pud)
 #if PAGETABLE_LEVELS == 4
 static inline pud_t __pud(pudval_t val)
 {
-	pudval_t ret;
-
-	if (sizeof(pudval_t) > sizeof(long))
-		ret = PVOP_CALLEE2(pudval_t, pv_mmu_ops.make_pud,
-				   val, (u64)val >> 32);
-	else
-		ret = PVOP_CALLEE1(pudval_t, pv_mmu_ops.make_pud,
-				   val);
-
-	return (pud_t) { ret };
+	return (pud_t) { PVOP_LIKELY_IDENT(pudval_t, pv_mmu_ops.make_pud,
+					   val) };
 }
 
 static inline pudval_t pud_val(pud_t pud)
 {
-	pudval_t ret;
-
-	if (sizeof(pudval_t) > sizeof(long))
-		ret =  PVOP_CALLEE2(pudval_t, pv_mmu_ops.pud_val,
-				    pud.pud, (u64)pud.pud >> 32);
-	else
-		ret =  PVOP_CALLEE1(pudval_t, pv_mmu_ops.pud_val,
-				    pud.pud);
-
-	return ret;
+	return PVOP_LIKELY_IDENT(pudval_t, pv_mmu_ops.pud_val,
+				 pud.pud);
 }
 
 static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
@@ -856,6 +791,11 @@ static __always_inline void arch_spin_unlock(struct arch_spinlock *lock)
 /* Promise that "func" already uses the right calling convention */
 #define __PV_IS_CALLEE_SAVE(func)			\
 	((struct paravirt_callee_save) { func })
+
+#define PV_NOT_IDENT_REGS_THUNK(func) PV_CALLEE_SAVE_REGS_THUNK(func)
+#define PV_NOT_IDENT(func) PV_CALLEE_SAVE(func)
+#define PV_IDENT_32 __PV_IS_CALLEE_SAVE(_paravirt_ident_32)
+#define PV_IDENT_64 __PV_IS_CALLEE_SAVE(_paravirt_ident_64)
 
 static inline notrace unsigned long arch_local_save_flags(void)
 {

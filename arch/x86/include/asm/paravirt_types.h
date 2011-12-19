@@ -60,6 +60,8 @@ struct paravirt_callee_save {
 	void *func;
 };
 
+typedef struct paravirt_callee_save paravirt_likely_ident;
+
 /* general info */
 struct pv_info {
 	unsigned int kernel_rpl;
@@ -288,11 +290,11 @@ struct pv_mmu_ops {
 	void (*ptep_modify_prot_commit)(struct mm_struct *mm, unsigned long addr,
 					pte_t *ptep, pte_t pte);
 
-	struct paravirt_callee_save pte_val;
-	struct paravirt_callee_save make_pte;
+	paravirt_likely_ident pte_val;
+	paravirt_likely_ident make_pte;
 
-	struct paravirt_callee_save pgd_val;
-	struct paravirt_callee_save make_pgd;
+	paravirt_likely_ident pgd_val;
+	paravirt_likely_ident make_pgd;
 
 #if PAGETABLE_LEVELS >= 3
 #ifdef CONFIG_X86_PAE
@@ -305,12 +307,12 @@ struct pv_mmu_ops {
 
 	void (*set_pud)(pud_t *pudp, pud_t pudval);
 
-	struct paravirt_callee_save pmd_val;
-	struct paravirt_callee_save make_pmd;
+	paravirt_likely_ident pmd_val;
+	paravirt_likely_ident make_pmd;
 
 #if PAGETABLE_LEVELS == 4
-	struct paravirt_callee_save pud_val;
-	struct paravirt_callee_save make_pud;
+	paravirt_likely_ident pud_val;
+	paravirt_likely_ident make_pud;
 
 	void (*set_pgd)(pgd_t *pudp, pgd_t pgdval);
 #endif	/* PAGETABLE_LEVELS == 4 */
@@ -666,6 +668,12 @@ int paravirt_disable_iospace(void);
 		     PVOP_CALL_ARG1(arg1), PVOP_CALL_ARG2(arg2),	\
 		     PVOP_CALL_ARG3(arg3), PVOP_CALL_ARG4(arg4))
 #endif
+
+#define PVOP_LIKELY_IDENT(rettype, op, arg)				\
+	(sizeof(rettype) > sizeof(long) ?				\
+	 PVOP_CALLEE2(rettype, op, arg, (u64)(arg) >> 32) :		\
+	 PVOP_CALLEE1(rettype, op, arg))
+
 
 /* Lazy mode for batching updates / context switch */
 enum paravirt_lazy_mode {

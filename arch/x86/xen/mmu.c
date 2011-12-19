@@ -427,13 +427,13 @@ static pteval_t xen_pte_val(pte_t pte)
 
 	return pte_mfn_to_pfn(pteval);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_pte_val);
+PV_NOT_IDENT_REGS_THUNK(xen_pte_val);
 
 static pgdval_t xen_pgd_val(pgd_t pgd)
 {
 	return pte_mfn_to_pfn(pgd.pgd);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_pgd_val);
+PV_NOT_IDENT_REGS_THUNK(xen_pgd_val);
 
 /*
  * Xen's PAT setup is part of its ABI, though I assume entries 6 & 7
@@ -493,20 +493,20 @@ static pte_t xen_make_pte(pteval_t pte)
 
 	return native_make_pte(pte);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_make_pte);
+PV_NOT_IDENT_REGS_THUNK(xen_make_pte);
 
 static pgd_t xen_make_pgd(pgdval_t pgd)
 {
 	pgd = pte_pfn_to_mfn(pgd);
 	return native_make_pgd(pgd);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_make_pgd);
+PV_NOT_IDENT_REGS_THUNK(xen_make_pgd);
 
 static pmdval_t xen_pmd_val(pmd_t pmd)
 {
 	return pte_mfn_to_pfn(pmd.pmd);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_pmd_val);
+PV_NOT_IDENT_REGS_THUNK(xen_pmd_val);
 
 static void xen_set_pud_hyper(pud_t *ptr, pud_t val)
 {
@@ -566,14 +566,14 @@ static pmd_t xen_make_pmd(pmdval_t pmd)
 	pmd = pte_pfn_to_mfn(pmd);
 	return native_make_pmd(pmd);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_make_pmd);
+PV_NOT_IDENT_REGS_THUNK(xen_make_pmd);
 
 #if PAGETABLE_LEVELS == 4
 static pudval_t xen_pud_val(pud_t pud)
 {
 	return pte_mfn_to_pfn(pud.pud);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_pud_val);
+PV_NOT_IDENT_REGS_THUNK(xen_pud_val);
 
 static pud_t xen_make_pud(pudval_t pud)
 {
@@ -581,7 +581,7 @@ static pud_t xen_make_pud(pudval_t pud)
 
 	return native_make_pud(pud);
 }
-PV_CALLEE_SAVE_REGS_THUNK(xen_make_pud);
+PV_NOT_IDENT_REGS_THUNK(xen_make_pud);
 
 static pgd_t *xen_get_user_pgd(pgd_t *pgd)
 {
@@ -2023,11 +2023,11 @@ static const struct pv_mmu_ops xen_mmu_ops __initconst = {
 	.ptep_modify_prot_start = __ptep_modify_prot_start,
 	.ptep_modify_prot_commit = __ptep_modify_prot_commit,
 
-	.pte_val = PV_CALLEE_SAVE(xen_pte_val),
-	.pgd_val = PV_CALLEE_SAVE(xen_pgd_val),
+	.pte_val = PV_NOT_IDENT(xen_pte_val),
+	.pgd_val = PV_NOT_IDENT(xen_pgd_val),
 
-	.make_pte = PV_CALLEE_SAVE(xen_make_pte),
-	.make_pgd = PV_CALLEE_SAVE(xen_make_pgd),
+	.make_pte = PV_NOT_IDENT(xen_make_pte),
+	.make_pgd = PV_NOT_IDENT(xen_make_pgd),
 
 #ifdef CONFIG_X86_PAE
 	.set_pte_atomic = xen_set_pte_atomic,
@@ -2036,12 +2036,12 @@ static const struct pv_mmu_ops xen_mmu_ops __initconst = {
 #endif	/* CONFIG_X86_PAE */
 	.set_pud = xen_set_pud_hyper,
 
-	.make_pmd = PV_CALLEE_SAVE(xen_make_pmd),
-	.pmd_val = PV_CALLEE_SAVE(xen_pmd_val),
+	.make_pmd = PV_NOT_IDENT(xen_make_pmd),
+	.pmd_val = PV_NOT_IDENT(xen_pmd_val),
 
 #if PAGETABLE_LEVELS == 4
-	.pud_val = PV_CALLEE_SAVE(xen_pud_val),
-	.make_pud = PV_CALLEE_SAVE(xen_make_pud),
+	.pud_val = PV_NOT_IDENT(xen_pud_val),
+	.make_pud = PV_NOT_IDENT(xen_make_pud),
 	.set_pgd = xen_set_pgd_hyper,
 
 	.alloc_pud = xen_alloc_pmd_init,
