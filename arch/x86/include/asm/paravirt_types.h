@@ -60,7 +60,14 @@ struct paravirt_callee_save {
 	void *func;
 };
 
+#ifdef CC_HAVE_ASM_GOTO
+typedef struct {
+	void *func;
+	void *nop_ident;
+} paravirt_likely_ident;
+#else
 typedef struct paravirt_callee_save paravirt_likely_ident;
+#endif
 
 /* general info */
 struct pv_info {
@@ -669,10 +676,19 @@ int paravirt_disable_iospace(void);
 		     PVOP_CALL_ARG3(arg3), PVOP_CALL_ARG4(arg4))
 #endif
 
+#ifdef CC_HAVE_ASM_GOTO
+#define PVOP_LIKELY_IDENT(rettype, op, arg)				\
+	(paravirt_is_nop(PARAVIRT_PATCH(op.nop_ident)) ?		\
+	 (rettype)(arg) :						\
+	 sizeof(rettype) > sizeof(long) ?				\
+	 PVOP_CALL2(rettype, op.func, arg, (u64)(arg) >> 32) :		\
+	 PVOP_CALL1(rettype, op.func, arg))
+#else
 #define PVOP_LIKELY_IDENT(rettype, op, arg)				\
 	(sizeof(rettype) > sizeof(long) ?				\
 	 PVOP_CALLEE2(rettype, op, arg, (u64)(arg) >> 32) :		\
 	 PVOP_CALLEE1(rettype, op, arg))
+#endif
 
 
 /* Lazy mode for batching updates / context switch */
@@ -690,6 +706,7 @@ void paravirt_enter_lazy_mmu(void);
 void paravirt_leave_lazy_mmu(void);
 
 void _paravirt_nop(void);
+void _paravirt_ignore(void);
 u32 _paravirt_ident_32(u32);
 u64 _paravirt_ident_64(u64);
 

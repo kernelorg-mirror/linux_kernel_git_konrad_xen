@@ -13,6 +13,16 @@
 #include <linux/types.h>
 #include <linux/cpumask.h>
 
+static __always_inline bool paravirt_is_nop(u8 type)
+{
+	asm goto(paravirt_alt("jmp %l[l_false]")
+		 : : [paravirt_typenum] "i" (type), paravirt_clobber(CLBR_NONE)
+		 : : l_false);
+	return true;
+l_false:
+	return false;
+}
+
 static inline int paravirt_enabled(void)
 {
 	return pv_info.paravirt_enabled;
@@ -792,10 +802,20 @@ static __always_inline void arch_spin_unlock(struct arch_spinlock *lock)
 #define __PV_IS_CALLEE_SAVE(func)			\
 	((struct paravirt_callee_save) { func })
 
+#ifdef CC_HAVE_ASM_GOTO
+#define PV_NOT_IDENT_REGS_THUNK(func)
+#define PV_NOT_IDENT(func)						\
+	((paravirt_likely_ident) { func, _paravirt_ignore })
+#define PV_IDENT_32							\
+	((paravirt_likely_ident) { _paravirt_ident_32, paravirt_nop })
+#define PV_IDENT_64							\
+	((paravirt_likely_ident) { _paravirt_ident_64, paravirt_nop })
+#else
 #define PV_NOT_IDENT_REGS_THUNK(func) PV_CALLEE_SAVE_REGS_THUNK(func)
 #define PV_NOT_IDENT(func) PV_CALLEE_SAVE(func)
 #define PV_IDENT_32 __PV_IS_CALLEE_SAVE(_paravirt_ident_32)
 #define PV_IDENT_64 __PV_IS_CALLEE_SAVE(_paravirt_ident_64)
+#endif
 
 static inline notrace unsigned long arch_local_save_flags(void)
 {

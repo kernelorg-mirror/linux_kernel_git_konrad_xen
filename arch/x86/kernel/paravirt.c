@@ -43,6 +43,11 @@ void _paravirt_nop(void)
 {
 }
 
+void _paravirt_ignore(void)
+{
+	BUG();
+}
+
 /* identity function, which can be inlined */
 u32 _paravirt_ident_32(u32 x)
 {
@@ -148,6 +153,8 @@ unsigned paravirt_patch_default(u8 type, u16 clobbers, void *insnbuf,
 	else if (opfunc == _paravirt_nop)
 		/* If the operation is a nop, then nop the callsite */
 		ret = paravirt_patch_nop();
+	else if (opfunc == _paravirt_ignore)
+		ret = paravirt_patch_ignore(len);
 
 	/* identity functions just return their single argument */
 	else if (opfunc == _paravirt_ident_32)
