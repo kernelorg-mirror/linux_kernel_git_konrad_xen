@@ -588,6 +588,11 @@ static int radeon_ttm_tt_populate(struct ttm_tt *ttm)
 		return 0;
 
 	rdev = radeon_get_rdev(ttm->bdev);
+#if __OS_HAS_AGP
+	if (rdev->flags & RADEON_IS_AGP) {
+		return ttm_agp_tt_populate(ttm);
+	}
+#endif
 
 #ifdef CONFIG_SWIOTLB
 	if (swiotlb_nr_tbl() && radeon_ttm_dma) {
@@ -624,6 +629,12 @@ static void radeon_ttm_tt_unpopulate(struct ttm_tt *ttm)
 	unsigned i;
 
 	rdev = radeon_get_rdev(ttm->bdev);
+#if __OS_HAS_AGP
+	if (rdev->flags & RADEON_IS_AGP) {
+		ttm_agp_tt_unpopulate(ttm);
+		return;
+	}
+#endif
 
 #ifdef CONFIG_SWIOTLB
 	if (swiotlb_nr_tbl() && radeon_ttm_dma) {
