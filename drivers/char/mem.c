@@ -316,7 +316,9 @@ static int mmap_mem(struct file *file, struct vm_area_struct *vma)
 	vma->vm_flags |= VM_RESERVED | VM_IO | VM_PFNMAP | VM_DONTEXPAND;
 	vma->vm_page_prot =  __pgprot(
 			pgprot_val(vm_get_page_prot(vma->vm_flags)) |
+#ifdef _PAGE_IOMAP
 			_PAGE_IOMAP |
+#endif
 			pgprot_val(phys_mem_access_prot(file,
 				vma->vm_pgoff,
 				size,
