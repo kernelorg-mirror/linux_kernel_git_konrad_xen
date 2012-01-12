@@ -919,9 +919,61 @@ static int p2m_dump_show(struct seq_file *m, void *v)
 #undef TYPE_UNKNOWN
 }
 
+static int mfn_dump_show(struct seq_file *m, void *v)
+{
+	unsigned long pfn, last_pfn, mfn, last_mfn;
+	unsigned long s_pfn, s_mfn;
+	bool reverse = false;
+	bool above_4gb = false;
+
+	if (!p2m_top)
+		return 0;
+
+	pfn = 0;
+	mfn = pfn_to_mfn(pfn++);
+
+	if (mfn /* [0] */ > pfn_to_mfn(pfn) /* [1] */) {
+		reverse = true;
+		pfn = MAX_DOMAIN_PAGES-1;
+	}
+	/* 24, 25, 26, 27, 28, 29 */
+	last_pfn = pfn;
+	last_mfn = pfn_to_mfn(last_pfn);
+	s_pfn = pfn;
+	s_mfn = last_mfn;
+	/* For reverse we start at the top, and go backwards. */
+	while (pfn < MAX_DOMAIN_PAGES && pfn > 0) {
+		if (reverse)
+			mfn = pfn_to_mfn(--pfn);
+		else
+			mfn = pfn_to_mfn(++pfn);
+
+		if (mfn != INVALID_P2M_ENTRY)
+			last_mfn++;
+
+		if (mfn >= PFN_DOWN((1ULL<<32)))
+			above_4gb = true;
+
+		if (last_mfn != mfn) {
+			seq_printf(m, " [0x%lx->0x%lx] %lx->%lx %s\n",
+				   s_pfn, pfn, s_mfn, mfn,
+				   above_4gb ? "Above 4GB" : "");
+			last_pfn = pfn;
+			last_mfn = mfn;
+			s_pfn = pfn;
+			s_mfn = mfn;
+		}
+	}
+	return 0;
+}
+
 static int p2m_dump_open(struct inode *inode, struct file *filp)
 {
 	return single_open(filp, p2m_dump_show, NULL);
+}
+static int mfn_dump_open(struct inode *inode, struct file *filp)
+{
+	return single_open(filp, mfn_dump_show, NULL);
 }
 
 static const struct file_operations p2m_dump_fops = {
@@ -930,6 +982,13 @@ static const struct file_operations p2m_dump_fops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
+static const struct file_operations mfn_dump_fops = {
+	.open		= mfn_dump_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 
 static struct dentry *d_mmu_debug;
 
@@ -943,6 +1002,7 @@ static int __init xen_p2m_debugfs(void)
 	d_mmu_debug = debugfs_create_dir("mmu", d_xen);
 
 	debugfs_create_file("p2m", 0600, d_mmu_debug, NULL, &p2m_dump_fops);
+	debugfs_create_file("mfn", 0600, d_mmu_debug, NULL, &mfn_dump_fops);
 	return 0;
 }
 fs_initcall(xen_p2m_debugfs);
