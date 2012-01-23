@@ -178,4 +178,9 @@ config XEN_PRIVCMD
 	depends on XEN
 	default m
 
+config XEN_ACPI_SINK
+	tristate
+	depends on XEN && ACPI_PROCESSOR && CPU_FREQ
+	default m
+
 endmenu
