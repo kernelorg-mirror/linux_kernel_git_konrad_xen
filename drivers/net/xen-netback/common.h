@@ -45,6 +45,12 @@
 #include <xen/grant_table.h>
 #include <xen/xenbus.h>
 
+struct pending_tx_info {
+	struct xen_netif_tx_request req;
+	struct xenvif *vif;
+};
+typedef unsigned int pending_ring_idx_t;
+
 struct xen_netbk;
 
 struct xenvif {
