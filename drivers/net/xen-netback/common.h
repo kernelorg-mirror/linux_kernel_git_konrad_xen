@@ -85,8 +85,9 @@ struct xenvif {
 
 	u8               fe_dev_addr[6];
 
-	/* Physical parameters of the comms window. */
-	unsigned int     irq;
+	/* When feature-split-event-channels = 0, tx_irq = rx_irq */
+	unsigned int tx_irq;
+	unsigned int rx_irq;
 
 	/* The shared rings and indexes. */
 	struct xen_netif_tx_back_ring tx;
@@ -145,7 +146,7 @@ struct xenvif *xenvif_alloc(struct device *parent,
 int xenvif_connect(struct xenvif *vif,
 		   unsigned long tx_ring_ref[], unsigned int tx_ring_order,
 		   unsigned long rx_ring_ref[], unsigned int rx_ring_order,
-		   unsigned int evtchn);
+		   unsigned int tx_evtchn, unsigned int rx_evtchn);
 void xenvif_disconnect(struct xenvif *vif);
 
 int xenvif_xenbus_init(void);

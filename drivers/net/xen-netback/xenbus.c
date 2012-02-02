@@ -131,6 +131,14 @@ static int netback_probe(struct xenbus_device *dev,
 			goto abort_transaction;
 		}
 
+		err = xenbus_printf(xbt, dev->nodename,
+				    "feature-split-event-channels",
+				    "%u", 1);
+		if (err) {
+			message = "writing feature-split-event-channels";
+			goto abort_transaction;
+		}
+
 		err = xenbus_transaction_end(xbt, 0);
 	} while (err == -EAGAIN);
 
@@ -408,7 +416,7 @@ static int connect_rings(struct backend_info *be)
 {
 	struct xenvif *vif = be->vif;
 	struct xenbus_device *dev = be->dev;
-	unsigned int evtchn, rx_copy;
+	unsigned int tx_evtchn, rx_evtchn, rx_copy;
 	int err;
 	int val;
 	unsigned long tx_ring_ref[NETBK_MAX_RING_PAGES];
@@ -417,12 +425,30 @@ static int connect_rings(struct backend_info *be)
 	unsigned int  rx_ring_order;
 
 	err = xenbus_gather(XBT_NIL, dev->otherend,
-			    "event-channel", "%u", &evtchn, NULL);
+			    "event-channel", "%u", &tx_evtchn, NULL);
 	if (err) {
-		xenbus_dev_fatal(dev, err,
-				 "reading %s/event-channel",
-				 dev->otherend);
-		return err;
+		err = xenbus_gather(XBT_NIL, dev->otherend,
+				    "event-channel-tx", "%u", &tx_evtchn,
+				    NULL);
+		if (err) {
+			xenbus_dev_fatal(dev, err,
+					 "reading %s/event-channel-tx",
+					 dev->otherend);
+			return err;
+		}
+		err = xenbus_gather(XBT_NIL, dev->otherend,
+				    "event-channel-rx", "%u", &rx_evtchn,
+				    NULL);
+		if (err) {
+			xenbus_dev_fatal(dev, err,
+					 "reading %s/event-channel-rx",
+					 dev->otherend);
+			return err;
+		}
+		dev_info(&dev->dev, "split event channels\n");
+	} else {
+		rx_evtchn = tx_evtchn;
+		dev_info(&dev->dev, "single event channel\n");
 	}
 
 	err = xenbus_scanf(XBT_NIL, dev->otherend, "tx-ring-order", "%u",
@@ -559,12 +585,17 @@ static int connect_rings(struct backend_info *be)
 	err = xenvif_connect(vif,
 			     tx_ring_ref, (1U << tx_ring_order),
 			     rx_ring_ref, (1U << rx_ring_order),
-			     evtchn);
+			     tx_evtchn, rx_evtchn);
 	if (err) {
 		int i;
-		xenbus_dev_fatal(dev, err,
-				 "binding port %u",
-				 evtchn);
+		if (tx_evtchn == rx_evtchn)
+			xenbus_dev_fatal(dev, err,
+					 "binding port %u",
+					 tx_evtchn);
+		else
+			xenbus_dev_fatal(dev, err,
+					 "binding tx port %u, rx port %u",
+					 tx_evtchn, rx_evtchn);
 		for (i = 0; i < (1U << tx_ring_order); i++)
 			xenbus_dev_fatal(dev, err,
 					 "mapping tx ring handle: %lu",
