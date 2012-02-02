@@ -1670,5 +1670,19 @@ failed_init:
 
 module_init(netback_init);
 
+static void __exit netback_exit(void)
+{
+	int i;
+	xenvif_xenbus_exit();
+	for (i = 0; i < xen_netbk_group_nr; i++) {
+		struct xen_netbk *netbk = &xen_netbk[i];
+		del_timer_sync(&netbk->net_timer);
+		kthread_stop(netbk->task);
+	}
+	vfree(xen_netbk);
+	page_pool_destroy();
+}
+module_exit(netback_exit);
+
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_ALIAS("xen-backend:vif");
