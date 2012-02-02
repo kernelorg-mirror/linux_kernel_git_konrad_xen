@@ -767,12 +767,13 @@ static int pcifront_publish_info(struct pcifront_device *pdev)
 {
 	int err = 0;
 	struct xenbus_transaction trans;
+	int grefs[1];
 
-	err = xenbus_grant_ring(pdev->xdev, virt_to_mfn(pdev->sh_info));
+	err = xenbus_grant_ring(pdev->xdev, pdev->sh_info, 1, grefs);
 	if (err < 0)
 		goto out;
 
-	pdev->gnt_ref = err;
+	pdev->gnt_ref = grefs[0];
 
 	err = xenbus_alloc_evtchn(pdev->xdev, &pdev->evtchn);
 	if (err)
