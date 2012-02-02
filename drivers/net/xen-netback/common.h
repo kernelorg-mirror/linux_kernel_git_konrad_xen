@@ -59,10 +59,18 @@ struct xenvif_rx_meta {
 
 #define MAX_BUFFER_OFFSET PAGE_SIZE
 
-#define XEN_NETIF_TX_RING_SIZE __CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE)
-#define XEN_NETIF_RX_RING_SIZE __CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE)
+#define NETBK_TX_RING_SIZE(_nr_pages)					\
+	(__CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE * (_nr_pages)))
+#define NETBK_RX_RING_SIZE(_nr_pages)					\
+	(__CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE * (_nr_pages)))
 
-#define MAX_PENDING_REQS 256
+#define NETBK_MAX_RING_PAGE_ORDER XENBUS_MAX_RING_PAGE_ORDER
+#define NETBK_MAX_RING_PAGES      (1U << NETBK_MAX_RING_PAGE_ORDER)
+
+#define NETBK_MAX_TX_RING_SIZE NETBK_TX_RING_SIZE(NETBK_MAX_RING_PAGES)
+#define NETBK_MAX_RX_RING_SIZE NETBK_RX_RING_SIZE(NETBK_MAX_RING_PAGES)
+
+#define MAX_PENDING_REQS NETBK_MAX_TX_RING_SIZE
 
 struct xenvif {
 	/* Unique identifier for this interface. */
@@ -83,6 +91,8 @@ struct xenvif {
 	/* The shared rings and indexes. */
 	struct xen_netif_tx_back_ring tx;
 	struct xen_netif_rx_back_ring rx;
+	int nr_tx_handles;
+	int nr_rx_handles;
 
 	/* Frontend feature information. */
 	u8 can_sg:1;
@@ -132,8 +142,10 @@ struct xenvif *xenvif_alloc(struct device *parent,
 			    domid_t domid,
 			    unsigned int handle);
 
-int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
-		   unsigned long rx_ring_ref, unsigned int evtchn);
+int xenvif_connect(struct xenvif *vif,
+		   unsigned long tx_ring_ref[], unsigned int tx_ring_order,
+		   unsigned long rx_ring_ref[], unsigned int rx_ring_order,
+		   unsigned int evtchn);
 void xenvif_disconnect(struct xenvif *vif);
 
 int xenvif_xenbus_init(void);
@@ -146,10 +158,12 @@ int xenvif_rx_ring_full(struct xenvif *vif);
 int xenvif_must_stop_queue(struct xenvif *vif);
 
 /* (Un)Map communication rings. */
-void xenvif_unmap_frontend_rings(struct xenvif *vif);
-int xenvif_map_frontend_rings(struct xenvif *vif,
-			      grant_ref_t tx_ring_ref,
-			      grant_ref_t rx_ring_ref);
+void xenvif_unmap_frontend_ring(struct xenvif *vif, void *addr);
+int xenvif_map_frontend_ring(struct xenvif *vif,
+			     void **vaddr,
+			     int domid,
+			     int ring_ref[],
+			     unsigned int  ring_ref_count);
 
 /* Check for SKBs from frontend and schedule backend processing */
 void xenvif_check_rx_xenvif(struct xenvif *vif);
@@ -166,5 +180,8 @@ int xenvif_tx_action(struct xenvif *vif, int budget);
 void xenvif_rx_action(struct xenvif *vif);
 
 int xenvif_kthread(void *data);
+
+extern unsigned int MODPARM_netback_max_tx_ring_page_order;
+extern unsigned int MODPARM_netback_max_rx_ring_page_order;
 
 #endif /* __XEN_NETBACK__COMMON_H__ */

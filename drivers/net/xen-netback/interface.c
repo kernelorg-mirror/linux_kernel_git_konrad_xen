@@ -320,10 +320,16 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	return vif;
 }
 
-int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
-		   unsigned long rx_ring_ref, unsigned int evtchn)
+int xenvif_connect(struct xenvif *vif,
+		   unsigned long tx_ring_ref[], unsigned int tx_ring_ref_count,
+		   unsigned long rx_ring_ref[], unsigned int rx_ring_ref_count,
+		   unsigned int evtchn)
 {
 	int err = -ENOMEM;
+	void *addr;
+	struct xen_netif_tx_sring *txs;
+	struct xen_netif_rx_sring *rxs;
+	int tmp[NETBK_MAX_RING_PAGES], i;
 
 	/* Already connected through? */
 	if (vif->irq)
@@ -331,15 +337,33 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 
 	__module_get(THIS_MODULE);
 
-	err = xenvif_map_frontend_rings(vif, tx_ring_ref, rx_ring_ref);
-	if (err < 0)
+	for (i = 0; i < tx_ring_ref_count; i++)
+		tmp[i] = tx_ring_ref[i];
+
+	err = xenvif_map_frontend_ring(vif, &addr, vif->domid,
+				       tmp, tx_ring_ref_count);
+	if (err)
 		goto err;
+	txs = addr;
+	BACK_RING_INIT(&vif->tx, txs, PAGE_SIZE * tx_ring_ref_count);
+	vif->nr_tx_handles = tx_ring_ref_count;
+
+	for (i = 0; i < rx_ring_ref_count; i++)
+		tmp[i] = rx_ring_ref[i];
+
+	err = xenvif_map_frontend_ring(vif, &addr, vif->domid,
+					tmp, rx_ring_ref_count);
+	if (err)
+		goto err_tx_unmap;
+	rxs = addr;
+	BACK_RING_INIT(&vif->rx, rxs, PAGE_SIZE * rx_ring_ref_count);
+	vif->nr_rx_handles = rx_ring_ref_count;
 
 	err = bind_interdomain_evtchn_to_irqhandler(
 		vif->domid, evtchn, xenvif_interrupt, 0,
 		vif->dev->name, vif);
 	if (err < 0)
-		goto err_unmap;
+		goto err_rx_unmap;
 	vif->irq = err;
 	disable_irq(vif->irq);
 
@@ -367,8 +391,10 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 	return 0;
 err_unbind:
 	unbind_from_irqhandler(vif->irq, vif);
-err_unmap:
-	xenvif_unmap_frontend_rings(vif);
+err_rx_unmap:
+	xenvif_unmap_frontend_ring(vif, (void *)vif->tx.sring);
+err_tx_unmap:
+	xenvif_unmap_frontend_ring(vif, (void *)vif->rx.sring);
 err:
 	module_put(THIS_MODULE);
 	return err;
@@ -401,7 +427,8 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	unregister_netdev(vif->dev);
 
-	xenvif_unmap_frontend_rings(vif);
+	xenvif_unmap_frontend_ring(vif, (void *)vif->tx.sring);
+	xenvif_unmap_frontend_ring(vif, (void *)vif->rx.sring);
 
 	free_netdev(vif->dev);
 
