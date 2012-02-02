@@ -47,7 +47,6 @@
 
 struct pending_tx_info {
 	struct xen_netif_tx_request req;
-	struct xenvif *vif;
 };
 typedef unsigned int pending_ring_idx_t;
 
@@ -61,13 +60,16 @@ struct xenvif {
 	/* Reference to netback processing backend. */
 	struct xen_netbk *netbk;
 
+	/* Use NAPI for guest TX */
+	struct napi_struct napi;
+	/* Use kthread for guest RX */
+	struct task_struct *task;
+	wait_queue_head_t wq;
+
 	u8               fe_dev_addr[6];
 
 	/* Physical parameters of the comms window. */
 	unsigned int     irq;
-
-	/* List of frontends to notify after a batch of frames sent. */
-	struct list_head notify_list;
 
 	/* The shared rings and indexes. */
 	struct xen_netif_tx_back_ring tx;
@@ -99,11 +101,7 @@ struct xenvif {
 	unsigned long rx_gso_checksum_fixup;
 
 	/* Miscellaneous private stuff. */
-	struct list_head schedule_list;
-	atomic_t         refcnt;
 	struct net_device *dev;
-
-	wait_queue_head_t waiting_to_free;
 };
 
 static inline struct xenbus_device *xenvif_to_xenbus_device(struct xenvif *vif)
@@ -122,9 +120,6 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 		   unsigned long rx_ring_ref, unsigned int evtchn);
 void xenvif_disconnect(struct xenvif *vif);
 
-void xenvif_get(struct xenvif *vif);
-void xenvif_put(struct xenvif *vif);
-
 int xenvif_xenbus_init(void);
 void xenvif_xenbus_exit(void);
 
@@ -140,18 +135,8 @@ int xen_netbk_map_frontend_rings(struct xenvif *vif,
 				 grant_ref_t tx_ring_ref,
 				 grant_ref_t rx_ring_ref);
 
-/* (De)Register a xenvif with the netback backend. */
-void xen_netbk_add_xenvif(struct xenvif *vif);
-void xen_netbk_remove_xenvif(struct xenvif *vif);
-
-/* (De)Schedule backend processing for a xenvif */
-void xen_netbk_schedule_xenvif(struct xenvif *vif);
-void xen_netbk_deschedule_xenvif(struct xenvif *vif);
-
 /* Check for SKBs from frontend and schedule backend processing */
 void xen_netbk_check_rx_xenvif(struct xenvif *vif);
-/* Receive an SKB from the frontend */
-void xenvif_receive_skb(struct xenvif *vif, struct sk_buff *skb);
 
 /* Queue an SKB for transmission to the frontend */
 void xen_netbk_queue_tx_skb(struct xenvif *vif, struct sk_buff *skb);
@@ -160,5 +145,14 @@ void xenvif_notify_tx_completion(struct xenvif *vif);
 
 /* Returns number of ring slots required to send an skb to the frontend */
 unsigned int xen_netbk_count_skb_slots(struct xenvif *vif, struct sk_buff *skb);
+
+/* Allocate and free xen_netbk structure */
+struct xen_netbk *xen_netbk_alloc_netbk(struct xenvif *vif);
+void xen_netbk_free_netbk(struct xen_netbk *netbk);
+
+int xen_netbk_tx_action(struct xen_netbk *netbk, int budget);
+void xen_netbk_rx_action(struct xen_netbk *netbk);
+
+int xen_netbk_kthread(void *data);
 
 #endif /* __XEN_NETBACK__COMMON_H__ */
