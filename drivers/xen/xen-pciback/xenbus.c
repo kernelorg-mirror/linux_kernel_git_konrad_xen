@@ -98,17 +98,18 @@ static void free_pdev(struct xen_pcibk_device *pdev)
 	kfree(pdev);
 }
 
-static int xen_pcibk_do_attach(struct xen_pcibk_device *pdev, int gnt_ref,
-			     int remote_evtchn)
+static int xen_pcibk_do_attach(struct xen_pcibk_device *pdev, int gnt_ref[],
+			       int nr_grefs,
+			       int remote_evtchn)
 {
 	int err = 0;
 	void *vaddr;
 
 	dev_dbg(&pdev->xdev->dev,
 		"Attaching to frontend resources - gnt_ref=%d evtchn=%d\n",
-		gnt_ref, remote_evtchn);
+		gnt_ref[0], remote_evtchn);
 
-	err = xenbus_map_ring_valloc(pdev->xdev, gnt_ref, &vaddr);
+	err = xenbus_map_ring_valloc(pdev->xdev, gnt_ref, nr_grefs, &vaddr);
 	if (err < 0) {
 		xenbus_dev_fatal(pdev->xdev, err,
 				"Error mapping other domain page in ours.");
@@ -172,7 +173,7 @@ static int xen_pcibk_attach(struct xen_pcibk_device *pdev)
 		goto out;
 	}
 
-	err = xen_pcibk_do_attach(pdev, gnt_ref, remote_evtchn);
+	err = xen_pcibk_do_attach(pdev, &gnt_ref, 1, remote_evtchn);
 	if (err)
 		goto out;
 
