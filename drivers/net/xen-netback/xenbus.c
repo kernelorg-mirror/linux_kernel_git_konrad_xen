@@ -387,7 +387,6 @@ static void connect(struct backend_info *be)
 	netif_wake_queue(be->vif->dev);
 }
 
-
 static int connect_rings(struct backend_info *be)
 {
 	struct xenvif *vif = be->vif;
