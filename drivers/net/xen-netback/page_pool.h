@@ -27,7 +27,10 @@
 #ifndef __PAGE_POOL_H__
 #define __PAGE_POOL_H__
 
-#include "common.h"
+struct pending_tx_info {
+	struct xen_netif_tx_request req;
+};
+typedef unsigned int pending_ring_idx_t;
 
 typedef uint32_t idx_t;
 
@@ -38,8 +41,8 @@ struct page_pool_entry {
 	struct page *page;
 	struct pending_tx_info tx_info;
 	union {
-		struct xen_netbk *netbk;
-		idx_t             fl;
+		struct xenvif *vif;
+		idx_t          fl;
 	} u;
 };
 
@@ -52,12 +55,12 @@ int  page_pool_init(void);
 void page_pool_destroy(void);
 
 
-struct page *page_pool_get(struct xen_netbk *netbk, int *pidx);
+struct page *page_pool_get(struct xenvif *vif, int *pidx);
 void         page_pool_put(int idx);
 int          is_in_pool(struct page *page, int *pidx);
 
 struct page            *to_page(int idx);
-struct xen_netbk       *to_netbk(int idx);
+struct xenvif          *to_vif(int idx);
 struct pending_tx_info *to_txinfo(int idx);
 
 #endif /* __PAGE_POOL_H__ */
