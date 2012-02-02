@@ -48,7 +48,7 @@ int xenvif_schedulable(struct xenvif *vif)
 
 static int xenvif_rx_schedulable(struct xenvif *vif)
 {
-	return xenvif_schedulable(vif) && !xen_netbk_rx_ring_full(vif);
+	return xenvif_schedulable(vif) && !xenvif_rx_ring_full(vif);
 }
 
 static irqreturn_t xenvif_interrupt(int irq, void *dev_id)
@@ -69,7 +69,7 @@ static int xenvif_poll(struct napi_struct *napi, int budget)
 	struct xenvif *vif = container_of(napi, struct xenvif, napi);
 	int work_done;
 
-	work_done = xen_netbk_tx_action(vif, budget);
+	work_done = xenvif_tx_action(vif, budget);
 
 	if (work_done < budget) {
 		int more_to_do = 0;
@@ -102,12 +102,12 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 
 	/* Reserve ring slots for the worst-case number of fragments. */
-	vif->rx_req_cons_peek += xen_netbk_count_skb_slots(vif, skb);
+	vif->rx_req_cons_peek += xenvif_count_skb_slots(vif, skb);
 
-	if (vif->can_queue && xen_netbk_must_stop_queue(vif))
+	if (vif->can_queue && xenvif_must_stop_queue(vif))
 		netif_stop_queue(dev);
 
-	xen_netbk_queue_tx_skb(vif, skb);
+	xenvif_queue_tx_skb(vif, skb);
 
 	return NETDEV_TX_OK;
 
@@ -133,7 +133,7 @@ static void xenvif_up(struct xenvif *vif)
 {
 	napi_enable(&vif->napi);
 	enable_irq(vif->irq);
-	xen_netbk_check_rx_xenvif(vif);
+	xenvif_check_rx_xenvif(vif);
 }
 
 static void xenvif_down(struct xenvif *vif)
@@ -331,7 +331,7 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 
 	__module_get(THIS_MODULE);
 
-	err = xen_netbk_map_frontend_rings(vif, tx_ring_ref, rx_ring_ref);
+	err = xenvif_map_frontend_rings(vif, tx_ring_ref, rx_ring_ref);
 	if (err < 0)
 		goto err;
 
@@ -344,7 +344,7 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 	disable_irq(vif->irq);
 
 	init_waitqueue_head(&vif->wq);
-	vif->task = kthread_create(xen_netbk_kthread,
+	vif->task = kthread_create(xenvif_kthread,
 				   (void *)vif,
 				   "vif%d.%d", vif->domid, vif->handle);
 	if (IS_ERR(vif->task)) {
@@ -368,7 +368,7 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 err_unbind:
 	unbind_from_irqhandler(vif->irq, vif);
 err_unmap:
-	xen_netbk_unmap_frontend_rings(vif);
+	xenvif_unmap_frontend_rings(vif);
 err:
 	module_put(THIS_MODULE);
 	return err;
@@ -401,7 +401,7 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	unregister_netdev(vif->dev);
 
-	xen_netbk_unmap_frontend_rings(vif);
+	xenvif_unmap_frontend_rings(vif);
 
 	free_netdev(vif->dev);
 
