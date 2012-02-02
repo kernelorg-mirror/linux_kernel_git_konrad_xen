@@ -45,6 +45,21 @@
 #include <xen/grant_table.h>
 #include <xen/xenbus.h>
 
+#define DRV_NAME "netback: "
+
+struct netbk_rx_meta {
+	int id;
+	int size;
+	int gso_size;
+};
+
+#define MAX_PENDING_REQS 256
+
+/* Discriminate from any valid pending_idx value. */
+#define INVALID_PENDING_IDX 0xFFFF
+
+#define MAX_BUFFER_OFFSET PAGE_SIZE
+
 struct pending_tx_info {
 	struct xen_netif_tx_request req;
 };
