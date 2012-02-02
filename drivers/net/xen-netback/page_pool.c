@@ -102,7 +102,7 @@ int is_in_pool(struct page *page, int *pidx)
 	return get_page_ext(page, pidx);
 }
 
-struct page *page_pool_get(struct xen_netbk *netbk, int *pidx)
+struct page *page_pool_get(struct xenvif *vif, int *pidx)
 {
 	int idx;
 	struct page *page;
@@ -118,7 +118,7 @@ struct page *page_pool_get(struct xen_netbk *netbk, int *pidx)
 	}
 
 	set_page_ext(page, idx);
-	pool[idx].u.netbk = netbk;
+	pool[idx].u.vif = vif;
 	pool[idx].page = page;
 
 	*pidx = idx;
@@ -131,7 +131,7 @@ void page_pool_put(int idx)
 	struct page *page = pool[idx].page;
 
 	pool[idx].page = NULL;
-	pool[idx].u.netbk = NULL;
+	pool[idx].u.vif = NULL;
 	page->mapping = 0;
 	put_page(page);
 	put_free_entry(idx);
@@ -174,9 +174,9 @@ struct page *to_page(int idx)
 	return pool[idx].page;
 }
 
-struct xen_netbk *to_netbk(int idx)
+struct xenvif *to_vif(int idx)
 {
-	return pool[idx].u.netbk;
+	return pool[idx].u.vif;
 }
 
 struct pending_tx_info *to_txinfo(int idx)

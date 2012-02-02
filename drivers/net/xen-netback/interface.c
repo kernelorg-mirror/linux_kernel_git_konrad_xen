@@ -55,9 +55,6 @@ static irqreturn_t xenvif_interrupt(int irq, void *dev_id)
 {
 	struct xenvif *vif = dev_id;
 
-	if (vif->netbk == NULL)
-		return IRQ_NONE;
-
 	if (xenvif_rx_schedulable(vif))
 		netif_wake_queue(vif->dev);
 
@@ -72,7 +69,7 @@ static int xenvif_poll(struct napi_struct *napi, int budget)
 	struct xenvif *vif = container_of(napi, struct xenvif, napi);
 	int work_done;
 
-	work_done = xen_netbk_tx_action(vif->netbk, budget);
+	work_done = xen_netbk_tx_action(vif, budget);
 
 	if (work_done < budget) {
 		int more_to_do = 0;
@@ -96,7 +93,8 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	BUG_ON(skb->dev != dev);
 
-	if (vif->netbk == NULL)
+	/* Drop the packet if vif is not ready */
+	if (vif->task == NULL)
 		goto drop;
 
 	/* Drop the packet if the target domain has no receive buffers. */
@@ -254,6 +252,7 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	int err;
 	struct net_device *dev;
 	struct xenvif *vif;
+	int i;
 	char name[IFNAMSIZ] = {};
 
 	snprintf(name, IFNAMSIZ - 1, "vif%u.%u", domid, handle);
@@ -268,7 +267,6 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	vif = netdev_priv(dev);
 	vif->domid  = domid;
 	vif->handle = handle;
-	vif->netbk = NULL;
 
 	vif->can_sg = 1;
 	vif->csum = 1;
@@ -286,6 +284,17 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	SET_ETHTOOL_OPS(dev, &xenvif_ethtool_ops);
 
 	dev->tx_queue_len = XENVIF_QUEUE_LENGTH;
+
+	skb_queue_head_init(&vif->rx_queue);
+	skb_queue_head_init(&vif->tx_queue);
+
+	vif->pending_cons = 0;
+	vif->pending_prod = MAX_PENDING_REQS;
+	for (i = 0; i < MAX_PENDING_REQS; i++)
+		vif->pending_ring[i] = i;
+
+	for (i = 0; i < MAX_PENDING_REQS; i++)
+		vif->mmap_pages[i] = INVALID_ENTRY;
 
 	/*
 	 * Initialise a dummy MAC address. We choose the numerically
@@ -334,14 +343,6 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 	vif->irq = err;
 	disable_irq(vif->irq);
 
-	vif->netbk = xen_netbk_alloc_netbk(vif);
-	if (!vif->netbk) {
-		pr_warn("Could not allocate xen_netbk\n");
-		err = -ENOMEM;
-		goto err_unbind;
-	}
-
-
 	init_waitqueue_head(&vif->wq);
 	vif->task = kthread_create(xen_netbk_kthread,
 				   (void *)vif,
@@ -349,7 +350,7 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 	if (IS_ERR(vif->task)) {
 		pr_warn("Could not create kthread\n");
 		err = PTR_ERR(vif->task);
-		goto err_free_netbk;
+		goto err_unbind;
 	}
 
 	rtnl_lock();
@@ -364,8 +365,6 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 	wake_up_process(vif->task);
 
 	return 0;
-err_free_netbk:
-	xen_netbk_free_netbk(vif->netbk);
 err_unbind:
 	unbind_from_irqhandler(vif->irq, vif);
 err_unmap:
@@ -390,9 +389,6 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	if (vif->task)
 		kthread_stop(vif->task);
-
-	if (vif->netbk)
-		xen_netbk_free_netbk(vif->netbk);
 
 	netif_napi_del(&vif->napi);
 

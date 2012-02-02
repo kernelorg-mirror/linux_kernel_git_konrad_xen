@@ -46,6 +46,7 @@
 #include <xen/xenbus.h>
 
 #define DRV_NAME "netback: "
+#include "page_pool.h"
 
 struct netbk_rx_meta {
 	int id;
@@ -53,27 +54,20 @@ struct netbk_rx_meta {
 	int gso_size;
 };
 
-#define MAX_PENDING_REQS 256
-
 /* Discriminate from any valid pending_idx value. */
 #define INVALID_PENDING_IDX 0xFFFF
 
 #define MAX_BUFFER_OFFSET PAGE_SIZE
 
-struct pending_tx_info {
-	struct xen_netif_tx_request req;
-};
-typedef unsigned int pending_ring_idx_t;
+#define XEN_NETIF_TX_RING_SIZE __CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE)
+#define XEN_NETIF_RX_RING_SIZE __CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE)
 
-struct xen_netbk;
+#define MAX_PENDING_REQS 256
 
 struct xenvif {
 	/* Unique identifier for this interface. */
 	domid_t          domid;
 	unsigned int     handle;
-
-	/* Reference to netback processing backend. */
-	struct xen_netbk *netbk;
 
 	/* Use NAPI for guest TX */
 	struct napi_struct napi;
@@ -117,15 +111,22 @@ struct xenvif {
 
 	/* Miscellaneous private stuff. */
 	struct net_device *dev;
+
+	struct sk_buff_head rx_queue;
+	struct sk_buff_head tx_queue;
+
+	idx_t mmap_pages[MAX_PENDING_REQS];
+
+	pending_ring_idx_t pending_prod;
+	pending_ring_idx_t pending_cons;
+
+	u16 pending_ring[MAX_PENDING_REQS];
 };
 
 static inline struct xenbus_device *xenvif_to_xenbus_device(struct xenvif *vif)
 {
 	return to_xenbus_device(vif->dev->dev.parent);
 }
-
-#define XEN_NETIF_TX_RING_SIZE __CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE)
-#define XEN_NETIF_RX_RING_SIZE __CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE)
 
 struct xenvif *xenvif_alloc(struct device *parent,
 			    domid_t domid,
@@ -161,12 +162,8 @@ void xenvif_notify_tx_completion(struct xenvif *vif);
 /* Returns number of ring slots required to send an skb to the frontend */
 unsigned int xen_netbk_count_skb_slots(struct xenvif *vif, struct sk_buff *skb);
 
-/* Allocate and free xen_netbk structure */
-struct xen_netbk *xen_netbk_alloc_netbk(struct xenvif *vif);
-void xen_netbk_free_netbk(struct xen_netbk *netbk);
-
-int xen_netbk_tx_action(struct xen_netbk *netbk, int budget);
-void xen_netbk_rx_action(struct xen_netbk *netbk);
+int xen_netbk_tx_action(struct xenvif *vif, int budget);
+void xen_netbk_rx_action(struct xenvif *vif);
 
 int xen_netbk_kthread(void *data);
 
