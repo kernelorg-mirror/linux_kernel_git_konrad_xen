@@ -622,7 +622,7 @@ void xenvif_rx_action(struct xenvif *vif)
 	}
 
 	if (need_to_notify)
-		notify_remote_via_irq(vif->irq);
+		notify_remote_via_irq(vif->rx_irq);
 
 	if (!skb_queue_empty(&vif->rx_queue))
 		xenvif_kick_thread(vif);
@@ -1392,7 +1392,7 @@ static void make_tx_response(struct xenvif *vif,
 	vif->tx.rsp_prod_pvt = ++i;
 	RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&vif->tx, notify);
 	if (notify)
-		notify_remote_via_irq(vif->irq);
+		notify_remote_via_irq(vif->tx_irq);
 }
 
 static struct xen_netif_rx_response *make_rx_response(struct xenvif *vif,

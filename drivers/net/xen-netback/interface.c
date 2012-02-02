@@ -51,15 +51,31 @@ static int xenvif_rx_schedulable(struct xenvif *vif)
 	return xenvif_schedulable(vif) && !xenvif_rx_ring_full(vif);
 }
 
-static irqreturn_t xenvif_interrupt(int irq, void *dev_id)
+static irqreturn_t xenvif_tx_interrupt(int irq, void *dev_id)
 {
 	struct xenvif *vif = dev_id;
 
-	if (xenvif_rx_schedulable(vif))
-		netif_wake_queue(vif->dev);
-
 	if (RING_HAS_UNCONSUMED_REQUESTS(&vif->tx))
 		napi_schedule(&vif->napi);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t xenvif_rx_interrupt(int irq, void *dev_id)
+{
+	struct xenvif *vif = dev_id;
+
+	if (xenvif_schedulable(vif) && !xenvif_rx_ring_full(vif))
+		netif_wake_queue(vif->dev);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t xenvif_interrupt(int irq, void *dev_id)
+{
+	xenvif_tx_interrupt(irq, dev_id);
+
+	xenvif_rx_interrupt(irq, dev_id);
 
 	return IRQ_HANDLED;
 }
@@ -132,14 +148,16 @@ static struct net_device_stats *xenvif_get_stats(struct net_device *dev)
 static void xenvif_up(struct xenvif *vif)
 {
 	napi_enable(&vif->napi);
-	enable_irq(vif->irq);
+	enable_irq(vif->tx_irq);
+	enable_irq(vif->rx_irq);
 	xenvif_check_rx_xenvif(vif);
 }
 
 static void xenvif_down(struct xenvif *vif)
 {
 	napi_disable(&vif->napi);
-	disable_irq(vif->irq);
+	disable_irq(vif->tx_irq);
+	disable_irq(vif->rx_irq);
 }
 
 static int xenvif_open(struct net_device *dev)
@@ -323,7 +341,7 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 int xenvif_connect(struct xenvif *vif,
 		   unsigned long tx_ring_ref[], unsigned int tx_ring_ref_count,
 		   unsigned long rx_ring_ref[], unsigned int rx_ring_ref_count,
-		   unsigned int evtchn)
+		   unsigned int tx_evtchn, unsigned int rx_evtchn)
 {
 	int err = -ENOMEM;
 	void *addr;
@@ -332,7 +350,7 @@ int xenvif_connect(struct xenvif *vif,
 	int tmp[NETBK_MAX_RING_PAGES], i;
 
 	/* Already connected through? */
-	if (vif->irq)
+	if (vif->tx_irq)
 		return 0;
 
 	__module_get(THIS_MODULE);
@@ -359,13 +377,34 @@ int xenvif_connect(struct xenvif *vif,
 	BACK_RING_INIT(&vif->rx, rxs, PAGE_SIZE * rx_ring_ref_count);
 	vif->nr_rx_handles = rx_ring_ref_count;
 
-	err = bind_interdomain_evtchn_to_irqhandler(
-		vif->domid, evtchn, xenvif_interrupt, 0,
-		vif->dev->name, vif);
-	if (err < 0)
-		goto err_rx_unmap;
-	vif->irq = err;
-	disable_irq(vif->irq);
+	if (tx_evtchn == rx_evtchn) { /* feature-split-event-channels == 0 */
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, tx_evtchn, xenvif_interrupt, 0,
+			vif->dev->name, vif);
+		if (err < 0)
+			goto err_rx_unmap;
+		vif->tx_irq = vif->rx_irq = err;
+		disable_irq(vif->tx_irq);
+		disable_irq(vif->rx_irq);
+	} else {
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, tx_evtchn, xenvif_tx_interrupt, 0,
+			vif->dev->name, vif);
+		if (err < 0)
+			goto err_rx_unmap;
+		vif->tx_irq = err;
+		disable_irq(vif->tx_irq);
+
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, rx_evtchn, xenvif_rx_interrupt, 0,
+			vif->dev->name, vif);
+		if (err < 0) {
+			unbind_from_irqhandler(vif->tx_irq, vif);
+			goto err_rx_unmap;
+		}
+		vif->rx_irq = err;
+		disable_irq(vif->rx_irq);
+	}
 
 	init_waitqueue_head(&vif->wq);
 	vif->task = kthread_create(xenvif_kthread,
@@ -390,7 +429,12 @@ int xenvif_connect(struct xenvif *vif,
 
 	return 0;
 err_unbind:
-	unbind_from_irqhandler(vif->irq, vif);
+	if (vif->tx_irq == vif->rx_irq)
+		unbind_from_irqhandler(vif->tx_irq, vif);
+	else {
+		unbind_from_irqhandler(vif->tx_irq, vif);
+		unbind_from_irqhandler(vif->rx_irq, vif);
+	}
 err_rx_unmap:
 	xenvif_unmap_frontend_ring(vif, (void *)vif->tx.sring);
 err_tx_unmap:
@@ -420,10 +464,12 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	del_timer_sync(&vif->credit_timeout);
 
-	if (vif->irq) {
-		unbind_from_irqhandler(vif->irq, vif);
+	if (vif->tx_irq) {
+		unbind_from_irqhandler(vif->tx_irq, vif);
 		need_module_put = 1;
 	}
+	if (vif->tx_irq != vif->rx_irq)
+		unbind_from_irqhandler(vif->rx_irq, vif);
 
 	unregister_netdev(vif->dev);
 
