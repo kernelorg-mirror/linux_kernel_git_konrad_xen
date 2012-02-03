@@ -68,6 +68,8 @@ processor-y			:= processor_driver.o processor_throttling.o
 processor-y			+= processor_idle.o processor_thermal.o
 processor-$(CONFIG_CPU_FREQ)	+= processor_perflib.o
 
+obj-$(CONFIG_ACPI_PROC_PASSTHROUGH_XEN)	+= processor_passthrough_xen.o
+
 obj-$(CONFIG_ACPI_PROCESSOR_AGGREGATOR) += acpi_pad.o
 obj-$(CONFIG_ACPI_IPMI)		+= acpi_ipmi.o
 

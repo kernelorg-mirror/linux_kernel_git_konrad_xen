@@ -268,6 +268,12 @@ L:	platform-driver-x86@vger.kernel.org
 S:	Orphan
 F:	drivers/platform/x86/wmi.c
 
+ACPI XEN PASSTHROUGH PROCESSOR
+M:	Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+L:	xen-devel@lists.xensource.com (moderated for non-subscribers)
+S:	Supported
+F:	drivers/acpi/*xen*
+
 AD1889 ALSA SOUND DRIVER
 M:	Kyle McMartin <kyle@mcmartin.ca>
 M:	Thibaut Varene <T-Bone@parisc-linux.org>
