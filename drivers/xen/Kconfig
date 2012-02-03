@@ -173,9 +173,15 @@ config XEN_PCIDEV_BACKEND
 
 	  If in doubt, say m.
 
+
 config XEN_PRIVCMD
 	tristate
 	depends on XEN
+	default m
+
+config XEN_ACPI_PASSTHROUGH
+	tristate
+	depends on XEN && ACPI_PROCESSOR && CPU_FREQ
 	default m
 
 endmenu
