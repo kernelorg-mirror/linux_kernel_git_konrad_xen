@@ -77,7 +77,7 @@ struct netfront_cb {
 #define XENNET_MAX_TX_RING_SIZE NET_TX_RING_SIZE(XENNET_MAX_RING_PAGES)
 #define XENNET_MAX_RX_RING_SIZE NET_RX_RING_SIZE(XENNET_MAX_RING_PAGES)
 
-#define TX_MAX_TARGET XENNET_MAX_TX_RING_SIZE
+#define TX_MAX_TARGET min_t(int, NET_TX_RING_SIZE(1), 256)
 
 struct netfront_stats {
 	u64			rx_packets;
@@ -135,7 +135,7 @@ struct netfront_info {
 	/* Receive-ring batched refills. */
 #define RX_MIN_TARGET 8
 #define RX_DFL_MIN_TARGET 64
-#define RX_MAX_TARGET XENNET_MAX_RX_RING_SIZE
+#define RX_MAX_TARGET min_t(int, NET_RX_RING_SIZE(1), 256)
 	unsigned rx_min_target, rx_max_target, rx_target;
 	struct sk_buff_head rx_batch;
 
