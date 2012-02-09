@@ -476,6 +476,7 @@ extern struct efi_memory_map memmap;
 extern void efi_init_function_register(struct efi_init_funcs *funcs);
 extern void get_efi_table_info(efi_config_table_t *config_tables, int nr_tables,
 			       struct efi *efi_t);
+extern void __init xen_efi_probe(void);
 
 /**
  * efi_range_is_wc - check the WC bit on an address range
