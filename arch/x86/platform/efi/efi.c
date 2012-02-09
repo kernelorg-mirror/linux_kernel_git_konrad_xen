@@ -56,6 +56,7 @@ static void efi_init_generic(void);
 static void efi_enter_virtual_mode_generic(void);
 static u32 efi_mem_type_generic(unsigned long phys_addr);
 static u64 efi_mem_attributes_generic(unsigned long phys_addr);
+static void efi_reserve_boot_services_generic(void);
 
 struct efi_init_funcs efi_generic_funcs = {
 	.__efi_init		     = efi_init_generic,
