@@ -79,8 +79,9 @@ typedef	struct {
 #define EFI_MEMORY_MAPPED_IO_PORT_SPACE	12
 #define EFI_PAL_CODE			13
 #define EFI_MAX_MEMORY_TYPE		14
-
+#define EFI_INVALID_TYPE		0xffffffff
 /* Attribute values: */
+#define EFI_INVALID_ATTRIBUTE	((u64)0x0000000000000000ULL)	/* invalid attribute*/
 #define EFI_MEMORY_UC		((u64)0x0000000000000001ULL)	/* uncached */
 #define EFI_MEMORY_WC		((u64)0x0000000000000002ULL)	/* write-coalescing */
 #define EFI_MEMORY_WT		((u64)0x0000000000000004ULL)	/* write-through */
@@ -434,6 +435,14 @@ extern struct efi {
 	efi_set_virtual_address_map_t *set_virtual_address_map;
 } efi;
 
+struct efi_init_funcs {
+	void (*__efi_init)(void);
+	void (*__efi_reserve_boot_services)(void);
+	void (*__efi_enter_virtual_mode)(void);
+	u32 (*__efi_mem_type)(unsigned long phys_addr);
+	u64 (*__efi_mem_attributes)(unsigned long phys_addr);
+};
+
 static inline int
 efi_guidcmp (efi_guid_t left, efi_guid_t right)
 {
@@ -464,6 +473,7 @@ extern unsigned long efi_get_time(void);
 extern int efi_set_rtc_mmss(unsigned long nowtime);
 extern void efi_reserve_boot_services(void);
 extern struct efi_memory_map memmap;
+extern void efi_init_function_register(struct efi_init_funcs *funcs);
 
 /**
  * efi_range_is_wc - check the WC bit on an address range

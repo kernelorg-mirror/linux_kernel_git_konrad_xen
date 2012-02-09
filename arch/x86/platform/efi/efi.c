@@ -50,6 +50,23 @@
 #define PFX 		"EFI: "
 
 int efi_enabled;
+
+static void efi_init_generic(void);
+
+static void efi_enter_virtual_mode_generic(void);
+static u32 efi_mem_type_generic(unsigned long phys_addr);
+static u64 efi_mem_attributes_generic(unsigned long phys_addr);
+
+struct efi_init_funcs efi_generic_funcs = {
+	.__efi_init		     = efi_init_generic,
+	.__efi_reserve_boot_services = efi_reserve_boot_services_generic,
+	.__efi_enter_virtual_mode    = efi_enter_virtual_mode_generic,
+	.__efi_mem_type		     = efi_mem_type_generic,
+	.__efi_mem_attributes	     = efi_mem_attributes_generic
+};
+
+struct efi_init_funcs *efi_override_funcs =  &efi_generic_funcs;
+
 EXPORT_SYMBOL(efi_enabled);
 
 struct efi __read_mostly efi = {
@@ -376,7 +393,7 @@ static void __init print_efi_memmap(void)
 }
 #endif  /*  EFI_DEBUG  */
 
-void __init efi_reserve_boot_services(void)
+static void efi_reserve_boot_services_generic(void)
 {
 	void *p;
 
@@ -429,7 +446,7 @@ static void __init efi_free_boot_services(void)
 	}
 }
 
-void __init efi_init(void)
+static void efi_init_generic(void)
 {
 	efi_config_table_t *config_tables;
 	efi_runtime_services_t *runtime;
@@ -618,7 +635,7 @@ static void __init runtime_code_page_mkexec(void)
  * This enables the runtime services to be called without having to
  * thunk back into physical mode for every invocation.
  */
-void __init efi_enter_virtual_mode(void)
+static void efi_enter_virtual_mode_generic(void)
 {
 	efi_memory_desc_t *md, *prev_md = NULL;
 	efi_status_t status;
@@ -752,7 +769,7 @@ void __init efi_enter_virtual_mode(void)
 /*
  * Convenience functions to obtain memory types and attributes
  */
-u32 efi_mem_type(unsigned long phys_addr)
+static u32 efi_mem_type_generic(unsigned long phys_addr)
 {
 	efi_memory_desc_t *md;
 	void *p;
@@ -767,7 +784,7 @@ u32 efi_mem_type(unsigned long phys_addr)
 	return 0;
 }
 
-u64 efi_mem_attributes(unsigned long phys_addr)
+static u64 efi_mem_attributes_generic(unsigned long phys_addr)
 {
 	efi_memory_desc_t *md;
 	void *p;
@@ -780,4 +797,42 @@ u64 efi_mem_attributes(unsigned long phys_addr)
 			return md->attribute;
 	}
 	return 0;
+}
+
+void efi_init_function_register(struct efi_init_funcs *funcs)
+{
+	efi_override_funcs = funcs;
+}
+
+void __init efi_init(void)
+{
+	if (efi_override_funcs->__efi_init)
+		efi_override_funcs->__efi_init();
+}
+
+void __init efi_reserve_boot_services(void)
+{
+	if (efi_override_funcs->__efi_reserve_boot_services)
+		efi_override_funcs->__efi_reserve_boot_services();
+}
+
+void __init efi_enter_virtual_mode(void)
+{
+	if (efi_override_funcs->__efi_enter_virtual_mode)
+		efi_override_funcs->__efi_enter_virtual_mode();
+}
+
+
+u32 efi_mem_type(unsigned long phys_addr)
+{
+	if (efi_override_funcs->__efi_mem_type)
+		return efi_override_funcs->__efi_mem_type(phys_addr);
+	return EFI_INVALID_TYPE;
+}
+
+u64 efi_mem_attributes(unsigned long phys_addr)
+{
+	if (efi_override_funcs->__efi_mem_attributes)
+		return efi_override_funcs->__efi_mem_attributes(phys_addr);
+	return EFI_INVALID_ATTRIBUTE;
 }
