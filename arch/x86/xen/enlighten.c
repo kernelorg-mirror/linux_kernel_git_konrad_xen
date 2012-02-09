@@ -31,6 +31,7 @@
 #include <linux/pci.h>
 #include <linux/gfp.h>
 #include <linux/memblock.h>
+#include <linux/efi.h>
 
 #include <xen/xen.h>
 #include <xen/interface/xen.h>
@@ -1280,6 +1281,8 @@ asmlinkage void __init xen_start_kernel(void)
 
 	xen_setup_runstate_info(0);
 
+	if (xen_initial_domain())
+		xen_efi_probe();
 	/* Start the world */
 #ifdef CONFIG_X86_32
 	i386_start_kernel();
