@@ -178,7 +178,7 @@ config XEN_PRIVCMD
 	depends on XEN
 	default m
 
-config XEN_PROCESSOR_HARVEST
+config XEN_PROCESSOR_PASSTHRU
 	tristate "Processor passthrough driver for Xen"
 	depends on XEN
 	depends on ACPI_PROCESSOR

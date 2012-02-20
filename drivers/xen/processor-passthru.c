@@ -36,7 +36,7 @@
 #include <xen/interface/platform.h>
 #include <asm/xen/hypercall.h>
 
-#define DRV_NAME "processor-passthrough-xen"
+#define DRV_NAME "xen-processor-thru"
 MODULE_AUTHOR("Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>");
 MODULE_DESCRIPTION("ACPI Power Management driver to pass Cx and Pxx data to Xen hypervisor");
 MODULE_LICENSE("GPL");
@@ -372,7 +372,7 @@ static int __init check_prereq(void)
 	return -ENODEV;
 }
 
-static int __init xen_processor_passthrough_init(void)
+static int __init xen_processor_passthru_init(void)
 {
 	int rc = check_prereq();
 
@@ -387,11 +387,11 @@ static int __init xen_processor_passthrough_init(void)
 	register_hotcpu_notifier(&xen_cpu_notifier);
 	return 0;
 }
-static void __exit xen_processor_passthrough_exit(void)
+static void __exit xen_processor_passthru_exit(void)
 {
 	unregister_hotcpu_notifier(&xen_cpu_notifier);
 	if (xen_processor_thread)
 		kthread_stop(xen_processor_thread);
 }
-late_initcall(xen_processor_passthrough_init);
-module_exit(xen_processor_passthrough_exit);
+late_initcall(xen_processor_passthru_init);
+module_exit(xen_processor_passthru_exit);
