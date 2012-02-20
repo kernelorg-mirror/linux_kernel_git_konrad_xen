@@ -119,14 +119,10 @@ static int xen_push_cxx_to_hypervisor(struct acpi_processor *_pr)
 	if (!no_hypercall && xen_initial_domain())
 		ret = HYPERVISOR_dom0_op(&op);
 
-	if (ret) {
-		pr_err(DRV_NAME ": Failed to send to hypervisor (rc:%d)\n", ret);
-		print_hex_dump_bytes("OP: ", DUMP_PREFIX_NONE, &op,
-				     sizeof(struct xen_platform_op));
-		print_hex_dump_bytes("Cx: ", DUMP_PREFIX_NONE, xen_cx_states,
-				     _pr->power.count *
-				     sizeof(struct xen_processor_cx));
-	}
+	if (ret)
+		pr_err(DRV_NAME "(CX): Hypervisor returned (%d) for ACPI ID: %d\n",
+		       ret, _pr->acpi_id);
+
 	kfree(xen_cx_states);
 
 	return ret;
@@ -229,15 +225,10 @@ static int xen_push_pxx_to_hypervisor(struct acpi_processor *_pr)
 	if (!no_hypercall && xen_initial_domain())
 		ret = HYPERVISOR_dom0_op(&op);
 
-	if (ret) {
-		pr_err(DRV_NAME ": Failed to send to hypervisor (rc:%d)\n", ret);
-		print_hex_dump_bytes("OP: ", DUMP_PREFIX_NONE, &op,
-				     sizeof(struct xen_platform_op));
-		if (!IS_ERR_OR_NULL(xen_states))
-			print_hex_dump_bytes("Pxx:", DUMP_PREFIX_NONE, xen_states,
-				     _pr->performance->state_count *
-				     sizeof(struct xen_processor_px));
-	}
+	if (ret)
+		pr_err(DRV_NAME "(_PXX): Hypervisor returned (%d) for ACPI ID %d\n",
+		       ret, _pr->acpi_id);
+
 	if (!IS_ERR_OR_NULL(xen_states))
 		kfree(xen_states);
 
