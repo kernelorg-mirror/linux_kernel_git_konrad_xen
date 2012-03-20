@@ -182,10 +182,18 @@ struct x86_msi_ops {
 	void (*restore_msi_irqs)(struct pci_dev *dev, int irq);
 };
 
+struct x86_ioapic_ops {
+	void (*init)(void);
+	unsigned int (*read)(unsigned int apic, unsigned int reg);
+	void (*write)(unsigned int apic, unsigned int reg, unsigned int value);
+	void (*modify)(unsigned int apic, unsigned int reg, unsigned int value);
+};
+
 extern struct x86_init_ops x86_init;
 extern struct x86_cpuinit_ops x86_cpuinit;
 extern struct x86_platform_ops x86_platform;
 extern struct x86_msi_ops x86_msi;
+extern struct x86_ioapic_ops x86_ioapic;
 
 extern void x86_init_noop(void);
 extern void x86_init_uint_noop(unsigned int unused);
