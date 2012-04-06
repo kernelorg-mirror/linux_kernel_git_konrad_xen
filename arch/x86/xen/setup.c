@@ -198,13 +198,30 @@ static unsigned long __init xen_get_max_pages(void)
 static void xen_align_and_add_e820_region(u64 start, u64 size, int type)
 {
 	u64 end = start + size;
-
 	/* Align RAM regions to page boundaries. */
 	if (type == E820_RAM) {
 		start = PAGE_ALIGN(start);
 		end &= ~((u64)PAGE_SIZE - 1);
 	}
 
+	if (type == E820_RAM) {
+		unsigned long pfn;
+		unsigned long s_pfn = PFN_DOWN(start);
+		unsigned long e_pfn = PFN_UP(end);
+
+		for (pfn = s_pfn; pfn < e_pfn; pfn++) {
+			unsigned long mfn = pfn_to_mfn(pfn);
+			if (mfn == INVALID_P2M_ENTRY)
+				break;
+			if (mfn_to_pfn(mfn) != pfn) {
+				printk(KERN_DEBUG "M2P[%lx] != %lx\n", mfn, pfn);
+				break;
+			}
+		}
+		if (pfn != e_pfn)
+			printk(KERN_DEBUG "E820_RAM %lx->%lx, last OK PFN is %lx\n",
+			       s_pfn, e_pfn, pfn);
+	}
 	e820_add_region(start, end - start, type);
 }
 
