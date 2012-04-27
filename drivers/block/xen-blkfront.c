@@ -339,7 +339,7 @@ static int blkif_queue_request(struct request *req)
 						.gref       = ref,
 						.first_sect = fsect,
 						.last_sect  = lsect };
-			/* 
+			/*
 			 * Set the page as foreign, considering that we are giving
 			 * it to a foreign domain.
 			 * This is important in case the destination domain is

@@ -21,6 +21,8 @@
 #include <xen/grant_table.h>
 #include "common.h"
 
+static DEFINE_RWLOCK(sysfs_read_lock);
+
 struct backend_info {
 	struct xenbus_device	*dev;
 	struct xen_blkif	*blkif;
@@ -223,10 +225,20 @@ int __init xen_blkif_interface_init(void)
 				   struct device_attribute *attr,	\
 				   char *buf)				\
 	{								\
-		struct xenbus_device *dev = to_xenbus_device(_dev);	\
-		struct backend_info *be = dev_get_drvdata(&dev->dev);	\
+		ssize_t ret = -ENODEV;					\
+		struct xenbus_device *dev;				\
+		struct backend_info *be;				\
 									\
-		return sprintf(buf, format, ##args);			\
+		if (!get_device(_dev))					\
+			return ret;					\
+		dev = to_xenbus_device(_dev);				\
+		read_lock(&sysfs_read_lock);				\
+		be = (struct backend_info *) dev_get_drvdata(&dev->dev);\
+		if (be != NULL)						\
+			ret = sprintf(buf, format, ##args);		\
+		read_unlock(&sysfs_read_lock);				\
+		put_device(_dev);					\
+		return ret;						\
 	}								\
 	static DEVICE_ATTR(name, S_IRUGO, show_##name, NULL)
 
@@ -351,6 +363,7 @@ static int xen_blkbk_remove(struct xenbus_device *dev)
 
 	DPRINTK("");
 
+	write_lock(&sysfs_read_lock);
 	if (be->major || be->minor)
 		xenvbd_sysfs_delif(dev);
 
@@ -369,6 +382,7 @@ static int xen_blkbk_remove(struct xenbus_device *dev)
 
 	kfree(be);
 	dev_set_drvdata(&dev->dev, NULL);
+	write_unlock(&sysfs_read_lock);
 	return 0;
 }
 
