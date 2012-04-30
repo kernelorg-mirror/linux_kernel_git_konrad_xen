@@ -17,6 +17,7 @@
  *
  */
 
+#define DEBUG 1
 #include <linux/cpumask.h>
 #include <linux/cpufreq.h>
 #include <linux/freezer.h>
@@ -47,13 +48,127 @@ module_param_named(off, no_hypercall, int, 0400);
 static unsigned int nr_acpi_bits;
 /* Mutex to protect the acpi_ids_done - for CPU hotplug use. */
 static DEFINE_MUTEX(acpi_ids_mutex);
+
+
 /* Which ACPI ID we have processed from 'struct acpi_processor'. */
 static unsigned long *acpi_ids_done;
 /* Which ACPI ID exist in the SSDT/DSDT processor definitions. */
 static unsigned long __initdata *acpi_id_present;
 /* And if there is an _CST definition (or a PBLK) for the ACPI IDs */
 static unsigned long __initdata *acpi_id_cst_present;
+/* .. The handle of the ACPI processor (used for _CST enumeration) */
+static acpi_handle __initdata *acpi_id_handles;
 
+static int get_acpi_cst_count(struct acpi_processor *pr)
+{
+	acpi_status status = 0;
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *cst;
+
+	status = acpi_evaluate_object(pr->handle, "_CST", NULL, &buffer);
+	if (ACPI_FAILURE(status))
+		return -ENODEV;
+
+	cst = buffer.pointer;
+
+	/* There must be at least 2 elements */
+	if (!cst || (cst->type != ACPI_TYPE_PACKAGE) || cst->package.count < 2) {
+		status = -EFAULT;
+		goto end;
+	}
+	status = cst->package.elements[0].integer.value;
+	/* Validate number of power states. */
+	if (status < 1 || status != cst->package.count - 1)
+		status = -EFAULT;
+end:
+	kfree(buffer.pointer);
+	return status;
+}
+static int read_acpi_cst(struct acpi_processor *pr,
+			 struct xen_processor_cx *dst_cx_states,
+			 unsigned int state, unsigned int *dst_idx)
+{
+	acpi_status status = 0;
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *cst;
+	union acpi_object *element;
+	union acpi_object *obj;
+	struct acpi_power_register *reg;
+	struct xen_processor_cx *cx;
+
+	status = acpi_evaluate_object(pr->handle, "_CST", NULL, &buffer);
+	if (ACPI_FAILURE(status))
+		return -ENODEV;
+
+	/* We don't do some checks b/c acpi_cst_count has done them. */
+
+	cst = buffer.pointer;
+	element = &(cst->package.elements[state]);
+
+	if (element->type != ACPI_TYPE_PACKAGE)
+		goto err_einval;
+
+	if (element->package.count != 4)
+		goto err_einval;
+
+	obj = &(element->package.elements[0]);
+
+	if (obj->type != ACPI_TYPE_BUFFER)
+		goto err_einval;
+
+	reg = (struct acpi_power_register *)obj->buffer.pointer;
+
+	if (reg->space_id != ACPI_ADR_SPACE_SYSTEM_IO &&
+	    (reg->space_id != ACPI_ADR_SPACE_FIXED_HARDWARE))
+		goto err_einval;
+
+	/* There should be an easy way to extract an integer... */
+	obj = &(element->package.elements[1]);
+	if (obj->type != ACPI_TYPE_INTEGER)
+		goto err_einval;
+
+	cx = &(dst_cx_states[*dst_idx]);
+	memset(cx, 0, sizeof(cx));
+	cx->type = obj->integer.value;
+
+	/*
+	 * Some buggy BIOSes won't list C1 in _CST -
+	 */
+	if (state == 1 && cx->type != ACPI_STATE_C1) {
+		cx->reg.space_id = ACPI_ADR_SPACE_FIXED_HARDWARE;
+		cx->latency = 1;
+		cx->power = 1000;
+		cx = &(dst_cx_states[++ *dst_idx]);
+		memset(cx, 0, sizeof(cx));
+	}
+
+	cx->reg.address = reg->address;
+	cx->reg.space_id = reg->space_id;
+	cx->reg.bit_width = reg->bit_width;
+	cx->reg.bit_offset = reg->bit_offset;
+	cx->reg.access_size = reg->access_size;
+
+	obj = &(element->package.elements[2]);
+	if (obj->type != ACPI_TYPE_INTEGER)
+		goto err_einval;
+
+	cx->latency = obj->integer.value;
+
+	obj = &(element->package.elements[3]);
+	if (obj->type != ACPI_TYPE_INTEGER)
+		goto err_einval;
+
+	cx->power = obj->integer.value;
+	cx->dpcnt = 0;
+	++ *dst_idx;
+	status = 0;
+	goto end;
+err_einval:
+	status = -EINVAL;
+end:
+	kfree(buffer.pointer);
+	return status;
+}
 static int push_cxx_to_hypervisor(struct acpi_processor *_pr)
 {
 	struct xen_platform_op op = {
@@ -63,44 +178,21 @@ static int push_cxx_to_hypervisor(struct acpi_processor *_pr)
 		.u.set_pminfo.type	= XEN_PM_CX,
 	};
 	struct xen_processor_cx *dst_cx, *dst_cx_states = NULL;
-	struct acpi_processor_cx *cx;
-	unsigned int i, ok;
+	unsigned int i, ok, count;
 	int ret = 0;
 
-	dst_cx_states = kcalloc(_pr->power.count,
-				sizeof(struct xen_processor_cx), GFP_KERNEL);
+	ret = get_acpi_cst_count(_pr);
+	if (ret <= 0)
+		return ret;
+
+	count = ret;
+	dst_cx_states = kcalloc(count, sizeof(struct xen_processor_cx), GFP_KERNEL);
 	if (!dst_cx_states)
 		return -ENOMEM;
 
-	for (ok = 0, i = 1; i <= _pr->power.count; i++) {
-		cx = &_pr->power.states[i];
-		if (!cx->valid)
-			continue;
-
-		dst_cx = &(dst_cx_states[ok++]);
-
-		dst_cx->reg.space_id = ACPI_ADR_SPACE_SYSTEM_IO;
-		if (cx->entry_method == ACPI_CSTATE_SYSTEMIO) {
-			dst_cx->reg.bit_width = 8;
-			dst_cx->reg.bit_offset = 0;
-			dst_cx->reg.access_size = 1;
-		} else {
-			dst_cx->reg.space_id = ACPI_ADR_SPACE_FIXED_HARDWARE;
-			if (cx->entry_method == ACPI_CSTATE_FFH) {
-				/* NATIVE_CSTATE_BEYOND_HALT */
-				dst_cx->reg.bit_offset = 2;
-				dst_cx->reg.bit_width = 1; /* VENDOR_INTEL */
-			}
-			dst_cx->reg.access_size = 0;
-		}
-		dst_cx->reg.address = cx->address;
-
-		dst_cx->type = cx->type;
-		dst_cx->latency = cx->latency;
-		dst_cx->power = cx->power;
-
-		dst_cx->dpcnt = 0;
-		set_xen_guest_handle(dst_cx->dp, NULL);
+	for (ok = 0, i = 1; i <= count; i++) {
+		if (read_acpi_cst(_pr, dst_cx_states, i, &ok))
+			break;
 	}
 	if (!ok) {
 		pr_debug(DRV_NAME "No _Cx for ACPI CPU %u\n", _pr->acpi_id);
@@ -121,12 +213,11 @@ static int push_cxx_to_hypervisor(struct acpi_processor *_pr)
 
 	if (!ret) {
 		pr_debug("ACPI CPU%u - C-states uploaded.\n", _pr->acpi_id);
-		for (i = 1; i <= _pr->power.count; i++) {
-			cx = &_pr->power.states[i];
-			if (!cx->valid)
-				continue;
-			pr_debug("     C%d: %s %d uS\n",
-				 cx->type, cx->desc, (u32)cx->latency);
+		for (i = 0; i < ok; i++) {
+			dst_cx = &(dst_cx_states[i]);
+			pr_debug("     C%d: %s%lx %d uS\n",
+				 dst_cx->type, dst_cx->reg.space_id == ACPI_ADR_SPACE_SYSTEM_IO ?
+				"IOPORT" : "HLT", dst_cx->reg.address, (u32)dst_cx->latency);
 		}
 	} else if (ret != -EINVAL)
 		/* EINVAL means the ACPI ID is incorrect - meaning the ACPI
@@ -277,11 +368,11 @@ static int upload_pm_data(struct acpi_processor *_pr)
 	int err = 0;
 
 	mutex_lock(&acpi_ids_mutex);
-	if (__test_and_set_bit(_pr->acpi_id, acpi_ids_done)) {
+	if (test_and_set_bit(_pr->acpi_id, acpi_ids_done)) {
 		mutex_unlock(&acpi_ids_mutex);
 		return -EBUSY;
 	}
-	if (_pr->flags.power)
+	if (_pr->handle)
 		err = push_cxx_to_hypervisor(_pr);
 
 	if (_pr->performance && _pr->performance->states)
@@ -389,12 +480,12 @@ read_acpi_id(acpi_handle handle, u32 lvl, void *context, void **rv)
 	}
 	/* .. and it has a C-state */
 	__set_bit(acpi_id, acpi_id_cst_present);
-
+	acpi_id_handles[acpi_id] = handle;
 	return AE_OK;
 }
 static int __init check_acpi_ids(struct acpi_processor *pr_backup)
 {
-
+	int rc = -ENOMEM;
 	if (!pr_backup)
 		return -ENODEV;
 
@@ -403,13 +494,15 @@ static int __init check_acpi_ids(struct acpi_processor *pr_backup)
 	 */
 	acpi_id_present = kcalloc(BITS_TO_LONGS(nr_acpi_bits), sizeof(unsigned long), GFP_KERNEL);
 	if (!acpi_id_present)
-		return -ENOMEM;
+		goto out;
 
 	acpi_id_cst_present = kcalloc(BITS_TO_LONGS(nr_acpi_bits), sizeof(unsigned long), GFP_KERNEL);
-	if (!acpi_id_cst_present) {
-		kfree(acpi_id_present);
-		return -ENOMEM;
-	}
+	if (!acpi_id_cst_present)
+		goto out;
+
+	acpi_id_handles = kcalloc(nr_acpi_bits, sizeof(*acpi_id_handles), GFP_KERNEL);
+	if (!acpi_id_handles)
+		goto out;
 
 	acpi_walk_namespace(ACPI_TYPE_PROCESSOR, ACPI_ROOT_OBJECT,
 			    ACPI_UINT32_MAX,
@@ -420,16 +513,24 @@ static int __init check_acpi_ids(struct acpi_processor *pr_backup)
 		unsigned int i;
 		for_each_set_bit(i, acpi_id_present, nr_acpi_bits) {
 			pr_backup->acpi_id = i;
-			/* Mask out C-states if there are no _CST or PBLK */
-			pr_backup->flags.power = test_bit(i, acpi_id_cst_present);
+			if (test_bit(i, acpi_id_cst_present)) {
+				pr_backup->handle = acpi_id_handles[i];
+			}
+			else
+				/* Mask out C-states if there are no _CST or PBLK */
+				pr_backup->handle = NULL;
 			(void)upload_pm_data(pr_backup);
 		}
 	}
+	rc = 0;
+out:
+	kfree(acpi_id_handles);
+	acpi_id_handles = NULL;
 	kfree(acpi_id_present);
 	acpi_id_present = NULL;
 	kfree(acpi_id_cst_present);
 	acpi_id_cst_present = NULL;
-	return 0;
+	return rc;
 }
 static int __init check_prereq(void)
 {
@@ -504,7 +605,7 @@ static int __init xen_acpi_processor_init(void)
 		}
 	}
 
-	/* Do initialization in ACPI core. It is OK to fail here. */
+	/* Do initialization in ACPI core. It is OK to fail there. */
 	(void)acpi_processor_preregister_performance(acpi_perf_data);
 
 	for_each_possible_cpu(i) {
