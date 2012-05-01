@@ -323,7 +323,7 @@ static unsigned int __init get_max_acpi_id(void)
 /*
  * The read_acpi_id and check_acpi_ids are there to support the Xen
  * oddity of virtual CPUs != physical CPUs in the initial domain.
- * The user can supply 'xen_max_vcpus=X' on the Xen hypervisor line
+ * The user can supply 'dom0_max_vcps=X' on the Xen hypervisor line
  * which will band the amount of CPUs the initial domain can see.
  * In general that is OK, except it plays havoc with any of the
  * for_each_[present|online]_cpu macros which are banded to the virtual
@@ -373,6 +373,14 @@ read_acpi_id(acpi_handle handle, u32 lvl, void *context, void **rv)
 
 	pr_debug(DRV_NAME "ACPI CPU%u w/ PBLK:0x%lx\n", acpi_id,
 		 (unsigned long)pblk);
+
+	/* acpi_early_processor_set_pdc does this, but it cannot do it for vCPUS
+	 * that are past the currently available vCPUS (so dom0_max_vcpus=X is
+	 * used). We can easily find if that is the case by seeing if we get the
+	 * same failure as the generic code and if so run _PDC ourselves.
+	 */
+	if (acpi_get_cpuid(handle, (acpi_type == ACPI_TYPE_DEVICE) ? 1 : 0, acpi_id) == -1)
+		acpi_processor_set_pdc(handle);
 
 	status = acpi_evaluate_object(handle, "_CST", NULL, &buffer);
 	if (ACPI_FAILURE(status)) {
