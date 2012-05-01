@@ -352,6 +352,7 @@ void __cpuinit acpi_processor_set_pdc(acpi_handle handle)
 	kfree(obj_list->pointer);
 	kfree(obj_list);
 }
+EXPORT_SYMBOL_GPL(acpi_processor_set_pdc);
 
 static acpi_status __init
 early_init_pdc(acpi_handle handle, u32 lvl, void *context, void **rv)
