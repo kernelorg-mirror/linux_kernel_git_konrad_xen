@@ -113,6 +113,31 @@ static int netback_probe(struct xenbus_device *dev,
 			message = "writing feature-rx-flip";
 			goto abort_transaction;
 		}
+		err = xenbus_printf(xbt, dev->nodename,
+				    "max-tx-ring-page-order",
+				    "%u",
+				    MODPARM_netback_max_tx_ring_page_order);
+		if (err) {
+			message = "writing max-tx-ring-page-order";
+			goto abort_transaction;
+		}
+
+		err = xenbus_printf(xbt, dev->nodename,
+				    "max-rx-ring-page-order",
+				    "%u",
+				    MODPARM_netback_max_rx_ring_page_order);
+		if (err) {
+			message = "writing max-rx-ring-page-order";
+			goto abort_transaction;
+		}
+
+		err = xenbus_printf(xbt, dev->nodename,
+				    "feature-split-event-channels",
+				    "%u", 1);
+		if (err) {
+			message = "writing feature-split-event-channels";
+			goto abort_transaction;
+		}
 
 		err = xenbus_transaction_end(xbt, 0);
 	} while (err == -EAGAIN);
@@ -387,25 +412,128 @@ static void connect(struct backend_info *be)
 	netif_wake_queue(be->vif->dev);
 }
 
-
 static int connect_rings(struct backend_info *be)
 {
 	struct xenvif *vif = be->vif;
 	struct xenbus_device *dev = be->dev;
-	unsigned long tx_ring_ref, rx_ring_ref;
-	unsigned int evtchn, rx_copy;
+	unsigned int tx_evtchn, rx_evtchn, rx_copy;
 	int err;
 	int val;
+	unsigned long tx_ring_ref[NETBK_MAX_RING_PAGES];
+	unsigned long rx_ring_ref[NETBK_MAX_RING_PAGES];
+	unsigned int  tx_ring_order;
+	unsigned int  rx_ring_order;
 
 	err = xenbus_gather(XBT_NIL, dev->otherend,
-			    "tx-ring-ref", "%lu", &tx_ring_ref,
-			    "rx-ring-ref", "%lu", &rx_ring_ref,
-			    "event-channel", "%u", &evtchn, NULL);
+			    "event-channel", "%u", &tx_evtchn, NULL);
 	if (err) {
-		xenbus_dev_fatal(dev, err,
-				 "reading %s/ring-ref and event-channel",
-				 dev->otherend);
-		return err;
+		err = xenbus_gather(XBT_NIL, dev->otherend,
+				    "event-channel-tx", "%u", &tx_evtchn,
+				    NULL);
+		if (err) {
+			xenbus_dev_fatal(dev, err,
+					 "reading %s/event-channel-tx",
+					 dev->otherend);
+			return err;
+		}
+		err = xenbus_gather(XBT_NIL, dev->otherend,
+				    "event-channel-rx", "%u", &rx_evtchn,
+				    NULL);
+		if (err) {
+			xenbus_dev_fatal(dev, err,
+					 "reading %s/event-channel-rx",
+					 dev->otherend);
+			return err;
+		}
+		dev_info(&dev->dev, "split event channels\n");
+	} else {
+		rx_evtchn = tx_evtchn;
+		dev_info(&dev->dev, "single event channel\n");
+	}
+
+	err = xenbus_scanf(XBT_NIL, dev->otherend, "tx-ring-order", "%u",
+			   &tx_ring_order);
+	if (err < 0) {
+		tx_ring_order = 0;
+
+		err = xenbus_scanf(XBT_NIL, dev->otherend, "tx-ring-ref", "%lu",
+				   &tx_ring_ref[0]);
+		if (err < 0) {
+			xenbus_dev_fatal(dev, err, "reading %s/tx-ring-ref",
+					 dev->otherend);
+			return err;
+		}
+	} else {
+		unsigned int i;
+
+		if (tx_ring_order > MODPARM_netback_max_tx_ring_page_order) {
+			err = -EINVAL;
+
+			xenbus_dev_fatal(dev, err,
+					 "%s/tx-ring-page-order too big",
+					 dev->otherend);
+			return err;
+		}
+
+		for (i = 0; i < (1U << tx_ring_order); i++) {
+			char ring_ref_name[sizeof("tx-ring-ref") + 2];
+
+			snprintf(ring_ref_name, sizeof(ring_ref_name),
+				 "tx-ring-ref%u", i);
+
+			err = xenbus_scanf(XBT_NIL, dev->otherend,
+					   ring_ref_name, "%lu",
+					   &tx_ring_ref[i]);
+			if (err < 0) {
+				xenbus_dev_fatal(dev, err,
+						 "reading %s/%s",
+						 dev->otherend,
+						 ring_ref_name);
+				return err;
+			}
+		}
+	}
+
+	err = xenbus_scanf(XBT_NIL, dev->otherend, "rx-ring-order", "%u",
+			   &rx_ring_order);
+	if (err < 0) {
+		rx_ring_order = 0;
+		err = xenbus_scanf(XBT_NIL, dev->otherend, "rx-ring-ref", "%lu",
+				   &rx_ring_ref[0]);
+		if (err < 0) {
+			xenbus_dev_fatal(dev, err, "reading %s/rx-ring-ref",
+					 dev->otherend);
+			return err;
+		}
+	} else {
+		unsigned int i;
+
+		if (rx_ring_order > MODPARM_netback_max_rx_ring_page_order) {
+			err = -EINVAL;
+
+			xenbus_dev_fatal(dev, err,
+					 "%s/rx-ring-page-order too big",
+					 dev->otherend);
+			return err;
+		}
+
+		for (i = 0; i < (1U << rx_ring_order); i++) {
+			char ring_ref_name[sizeof("rx-ring-ref") + 2];
+
+			snprintf(ring_ref_name, sizeof(ring_ref_name),
+				 "rx-ring-ref%u", i);
+
+			err = xenbus_scanf(XBT_NIL, dev->otherend,
+					   ring_ref_name, "%lu",
+					   &rx_ring_ref[i]);
+			if (err < 0) {
+				xenbus_dev_fatal(dev, err,
+						 "reading %s/%s",
+						 dev->otherend,
+						 ring_ref_name);
+				return err;
+			}
+		}
 	}
 
 	err = xenbus_scanf(XBT_NIL, dev->otherend, "request-rx-copy", "%u",
@@ -454,11 +582,28 @@ static int connect_rings(struct backend_info *be)
 	vif->csum = !val;
 
 	/* Map the shared frame, irq etc. */
-	err = xenvif_connect(vif, tx_ring_ref, rx_ring_ref, evtchn);
+	err = xenvif_connect(vif,
+			     tx_ring_ref, (1U << tx_ring_order),
+			     rx_ring_ref, (1U << rx_ring_order),
+			     tx_evtchn, rx_evtchn);
 	if (err) {
-		xenbus_dev_fatal(dev, err,
-				 "mapping shared-frames %lu/%lu port %u",
-				 tx_ring_ref, rx_ring_ref, evtchn);
+		int i;
+		if (tx_evtchn == rx_evtchn)
+			xenbus_dev_fatal(dev, err,
+					 "binding port %u",
+					 tx_evtchn);
+		else
+			xenbus_dev_fatal(dev, err,
+					 "binding tx port %u, rx port %u",
+					 tx_evtchn, rx_evtchn);
+		for (i = 0; i < (1U << tx_ring_order); i++)
+			xenbus_dev_fatal(dev, err,
+					 "mapping tx ring handle: %lu",
+					 tx_ring_ref[i]);
+		for (i = 0; i < (1U << rx_ring_order); i++)
+			xenbus_dev_fatal(dev, err,
+					 "mapping rx ring handle: %lu",
+					 tx_ring_ref[i]);
 		return err;
 	}
 	return 0;
@@ -484,4 +629,9 @@ static DEFINE_XENBUS_DRIVER(netback, ,
 int xenvif_xenbus_init(void)
 {
 	return xenbus_register_backend(&netback_driver);
+}
+
+void xenvif_xenbus_exit(void)
+{
+	return xenbus_unregister_driver(&netback_driver);
 }

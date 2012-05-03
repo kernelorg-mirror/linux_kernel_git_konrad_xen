@@ -45,27 +45,55 @@
 #include <xen/grant_table.h>
 #include <xen/xenbus.h>
 
-struct xen_netbk;
+#define DRV_NAME "netback: "
+#include "page_pool.h"
+
+struct xenvif_rx_meta {
+	int id;
+	int size;
+	int gso_size;
+};
+
+/* Discriminate from any valid pending_idx value. */
+#define INVALID_PENDING_IDX 0xFFFF
+
+#define MAX_BUFFER_OFFSET PAGE_SIZE
+
+#define NETBK_TX_RING_SIZE(_nr_pages)					\
+	(__CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE * (_nr_pages)))
+#define NETBK_RX_RING_SIZE(_nr_pages)					\
+	(__CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE * (_nr_pages)))
+
+#define NETBK_MAX_RING_PAGE_ORDER XENBUS_MAX_RING_PAGE_ORDER
+#define NETBK_MAX_RING_PAGES      (1U << NETBK_MAX_RING_PAGE_ORDER)
+
+#define NETBK_MAX_TX_RING_SIZE NETBK_TX_RING_SIZE(NETBK_MAX_RING_PAGES)
+#define NETBK_MAX_RX_RING_SIZE NETBK_RX_RING_SIZE(NETBK_MAX_RING_PAGES)
+
+#define MAX_PENDING_REQS NETBK_MAX_TX_RING_SIZE
 
 struct xenvif {
 	/* Unique identifier for this interface. */
 	domid_t          domid;
 	unsigned int     handle;
 
-	/* Reference to netback processing backend. */
-	struct xen_netbk *netbk;
+	/* Use NAPI for guest TX */
+	struct napi_struct napi;
+	/* Use kthread for guest RX */
+	struct task_struct *task;
+	wait_queue_head_t wq;
 
 	u8               fe_dev_addr[6];
 
-	/* Physical parameters of the comms window. */
-	unsigned int     irq;
-
-	/* List of frontends to notify after a batch of frames sent. */
-	struct list_head notify_list;
+	/* When feature-split-event-channels = 0, tx_irq = rx_irq */
+	unsigned int tx_irq;
+	unsigned int rx_irq;
 
 	/* The shared rings and indexes. */
 	struct xen_netif_tx_back_ring tx;
 	struct xen_netif_rx_back_ring rx;
+	int nr_tx_handles;
+	int nr_rx_handles;
 
 	/* Frontend feature information. */
 	u8 can_sg:1;
@@ -93,11 +121,17 @@ struct xenvif {
 	unsigned long rx_gso_checksum_fixup;
 
 	/* Miscellaneous private stuff. */
-	struct list_head schedule_list;
-	atomic_t         refcnt;
 	struct net_device *dev;
 
-	wait_queue_head_t waiting_to_free;
+	struct sk_buff_head rx_queue;
+	struct sk_buff_head tx_queue;
+
+	idx_t mmap_pages[MAX_PENDING_REQS];
+
+	pending_ring_idx_t pending_prod;
+	pending_ring_idx_t pending_cons;
+
+	u16 pending_ring[MAX_PENDING_REQS];
 };
 
 static inline struct xenbus_device *xenvif_to_xenbus_device(struct xenvif *vif)
@@ -105,53 +139,50 @@ static inline struct xenbus_device *xenvif_to_xenbus_device(struct xenvif *vif)
 	return to_xenbus_device(vif->dev->dev.parent);
 }
 
-#define XEN_NETIF_TX_RING_SIZE __CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE)
-#define XEN_NETIF_RX_RING_SIZE __CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE)
-
 struct xenvif *xenvif_alloc(struct device *parent,
 			    domid_t domid,
 			    unsigned int handle);
 
-int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
-		   unsigned long rx_ring_ref, unsigned int evtchn);
+int xenvif_connect(struct xenvif *vif,
+		   unsigned long tx_ring_ref[], unsigned int tx_ring_order,
+		   unsigned long rx_ring_ref[], unsigned int rx_ring_order,
+		   unsigned int tx_evtchn, unsigned int rx_evtchn);
 void xenvif_disconnect(struct xenvif *vif);
 
-void xenvif_get(struct xenvif *vif);
-void xenvif_put(struct xenvif *vif);
-
 int xenvif_xenbus_init(void);
+void xenvif_xenbus_exit(void);
 
 int xenvif_schedulable(struct xenvif *vif);
 
-int xen_netbk_rx_ring_full(struct xenvif *vif);
+int xenvif_rx_ring_full(struct xenvif *vif);
 
-int xen_netbk_must_stop_queue(struct xenvif *vif);
+int xenvif_must_stop_queue(struct xenvif *vif);
 
 /* (Un)Map communication rings. */
-void xen_netbk_unmap_frontend_rings(struct xenvif *vif);
-int xen_netbk_map_frontend_rings(struct xenvif *vif,
-				 grant_ref_t tx_ring_ref,
-				 grant_ref_t rx_ring_ref);
-
-/* (De)Register a xenvif with the netback backend. */
-void xen_netbk_add_xenvif(struct xenvif *vif);
-void xen_netbk_remove_xenvif(struct xenvif *vif);
-
-/* (De)Schedule backend processing for a xenvif */
-void xen_netbk_schedule_xenvif(struct xenvif *vif);
-void xen_netbk_deschedule_xenvif(struct xenvif *vif);
+void xenvif_unmap_frontend_ring(struct xenvif *vif, void *addr);
+int xenvif_map_frontend_ring(struct xenvif *vif,
+			     void **vaddr,
+			     int domid,
+			     int ring_ref[],
+			     unsigned int  ring_ref_count);
 
 /* Check for SKBs from frontend and schedule backend processing */
-void xen_netbk_check_rx_xenvif(struct xenvif *vif);
-/* Receive an SKB from the frontend */
-void xenvif_receive_skb(struct xenvif *vif, struct sk_buff *skb);
+void xenvif_check_rx_xenvif(struct xenvif *vif);
 
 /* Queue an SKB for transmission to the frontend */
-void xen_netbk_queue_tx_skb(struct xenvif *vif, struct sk_buff *skb);
+void xenvif_queue_tx_skb(struct xenvif *vif, struct sk_buff *skb);
 /* Notify xenvif that ring now has space to send an skb to the frontend */
 void xenvif_notify_tx_completion(struct xenvif *vif);
 
 /* Returns number of ring slots required to send an skb to the frontend */
-unsigned int xen_netbk_count_skb_slots(struct xenvif *vif, struct sk_buff *skb);
+unsigned int xenvif_count_skb_slots(struct xenvif *vif, struct sk_buff *skb);
+
+int xenvif_tx_action(struct xenvif *vif, int budget);
+void xenvif_rx_action(struct xenvif *vif);
+
+int xenvif_kthread(void *data);
+
+extern unsigned int MODPARM_netback_max_tx_ring_page_order;
+extern unsigned int MODPARM_netback_max_rx_ring_page_order;
 
 #endif /* __XEN_NETBACK__COMMON_H__ */

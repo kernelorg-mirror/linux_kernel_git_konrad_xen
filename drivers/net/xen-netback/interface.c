@@ -30,6 +30,7 @@
 
 #include "common.h"
 
+#include <linux/kthread.h>
 #include <linux/ethtool.h>
 #include <linux/rtnetlink.h>
 #include <linux/if_vlan.h>
@@ -38,17 +39,7 @@
 #include <asm/xen/hypercall.h>
 
 #define XENVIF_QUEUE_LENGTH 32
-
-void xenvif_get(struct xenvif *vif)
-{
-	atomic_inc(&vif->refcnt);
-}
-
-void xenvif_put(struct xenvif *vif)
-{
-	if (atomic_dec_and_test(&vif->refcnt))
-		wake_up(&vif->waiting_to_free);
-}
+#define XENVIF_NAPI_WEIGHT  64
 
 int xenvif_schedulable(struct xenvif *vif)
 {
@@ -57,22 +48,59 @@ int xenvif_schedulable(struct xenvif *vif)
 
 static int xenvif_rx_schedulable(struct xenvif *vif)
 {
-	return xenvif_schedulable(vif) && !xen_netbk_rx_ring_full(vif);
+	return xenvif_schedulable(vif) && !xenvif_rx_ring_full(vif);
+}
+
+static irqreturn_t xenvif_tx_interrupt(int irq, void *dev_id)
+{
+	struct xenvif *vif = dev_id;
+
+	if (RING_HAS_UNCONSUMED_REQUESTS(&vif->tx))
+		napi_schedule(&vif->napi);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t xenvif_rx_interrupt(int irq, void *dev_id)
+{
+	struct xenvif *vif = dev_id;
+
+	if (xenvif_schedulable(vif) && !xenvif_rx_ring_full(vif))
+		netif_wake_queue(vif->dev);
+
+	return IRQ_HANDLED;
 }
 
 static irqreturn_t xenvif_interrupt(int irq, void *dev_id)
 {
-	struct xenvif *vif = dev_id;
+	xenvif_tx_interrupt(irq, dev_id);
 
-	if (vif->netbk == NULL)
-		return IRQ_NONE;
-
-	xen_netbk_schedule_xenvif(vif);
-
-	if (xenvif_rx_schedulable(vif))
-		netif_wake_queue(vif->dev);
+	xenvif_rx_interrupt(irq, dev_id);
 
 	return IRQ_HANDLED;
+}
+
+static int xenvif_poll(struct napi_struct *napi, int budget)
+{
+	struct xenvif *vif = container_of(napi, struct xenvif, napi);
+	int work_done;
+
+	work_done = xenvif_tx_action(vif, budget);
+
+	if (work_done < budget) {
+		int more_to_do = 0;
+		unsigned long flag;
+
+		local_irq_save(flag);
+
+		RING_FINAL_CHECK_FOR_REQUESTS(&vif->tx, more_to_do);
+		if (!more_to_do || work_done < 0)
+			__napi_complete(napi);
+
+		local_irq_restore(flag);
+	}
+
+	return work_done;
 }
 
 static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -81,7 +109,8 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	BUG_ON(skb->dev != dev);
 
-	if (vif->netbk == NULL)
+	/* Drop the packet if vif is not ready */
+	if (vif->task == NULL)
 		goto drop;
 
 	/* Drop the packet if the target domain has no receive buffers. */
@@ -89,13 +118,12 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 
 	/* Reserve ring slots for the worst-case number of fragments. */
-	vif->rx_req_cons_peek += xen_netbk_count_skb_slots(vif, skb);
-	xenvif_get(vif);
+	vif->rx_req_cons_peek += xenvif_count_skb_slots(vif, skb);
 
-	if (vif->can_queue && xen_netbk_must_stop_queue(vif))
+	if (vif->can_queue && xenvif_must_stop_queue(vif))
 		netif_stop_queue(dev);
 
-	xen_netbk_queue_tx_skb(vif, skb);
+	xenvif_queue_tx_skb(vif, skb);
 
 	return NETDEV_TX_OK;
 
@@ -103,11 +131,6 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	vif->dev->stats.tx_dropped++;
 	dev_kfree_skb(skb);
 	return NETDEV_TX_OK;
-}
-
-void xenvif_receive_skb(struct xenvif *vif, struct sk_buff *skb)
-{
-	netif_rx_ni(skb);
 }
 
 void xenvif_notify_tx_completion(struct xenvif *vif)
@@ -124,16 +147,17 @@ static struct net_device_stats *xenvif_get_stats(struct net_device *dev)
 
 static void xenvif_up(struct xenvif *vif)
 {
-	xen_netbk_add_xenvif(vif);
-	enable_irq(vif->irq);
-	xen_netbk_check_rx_xenvif(vif);
+	napi_enable(&vif->napi);
+	enable_irq(vif->tx_irq);
+	enable_irq(vif->rx_irq);
+	xenvif_check_rx_xenvif(vif);
 }
 
 static void xenvif_down(struct xenvif *vif)
 {
-	disable_irq(vif->irq);
-	xen_netbk_deschedule_xenvif(vif);
-	xen_netbk_remove_xenvif(vif);
+	napi_disable(&vif->napi);
+	disable_irq(vif->tx_irq);
+	disable_irq(vif->rx_irq);
 }
 
 static int xenvif_open(struct net_device *dev)
@@ -246,6 +270,7 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	int err;
 	struct net_device *dev;
 	struct xenvif *vif;
+	int i;
 	char name[IFNAMSIZ] = {};
 
 	snprintf(name, IFNAMSIZ - 1, "vif%u.%u", domid, handle);
@@ -260,14 +285,10 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	vif = netdev_priv(dev);
 	vif->domid  = domid;
 	vif->handle = handle;
-	vif->netbk  = NULL;
+
 	vif->can_sg = 1;
 	vif->csum = 1;
-	atomic_set(&vif->refcnt, 1);
-	init_waitqueue_head(&vif->waiting_to_free);
 	vif->dev = dev;
-	INIT_LIST_HEAD(&vif->schedule_list);
-	INIT_LIST_HEAD(&vif->notify_list);
 
 	vif->credit_bytes = vif->remaining_credit = ~0UL;
 	vif->credit_usec  = 0UL;
@@ -282,6 +303,17 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 
 	dev->tx_queue_len = XENVIF_QUEUE_LENGTH;
 
+	skb_queue_head_init(&vif->rx_queue);
+	skb_queue_head_init(&vif->tx_queue);
+
+	vif->pending_cons = 0;
+	vif->pending_prod = MAX_PENDING_REQS;
+	for (i = 0; i < MAX_PENDING_REQS; i++)
+		vif->pending_ring[i] = i;
+
+	for (i = 0; i < MAX_PENDING_REQS; i++)
+		vif->mmap_pages[i] = INVALID_ENTRY;
+
 	/*
 	 * Initialise a dummy MAC address. We choose the numerically
 	 * largest non-broadcast address to prevent the address getting
@@ -290,6 +322,8 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	 */
 	memset(dev->dev_addr, 0xFF, ETH_ALEN);
 	dev->dev_addr[0] &= ~0x01;
+
+	netif_napi_add(dev, &vif->napi, xenvif_poll, XENVIF_NAPI_WEIGHT);
 
 	netif_carrier_off(dev);
 
@@ -304,28 +338,83 @@ struct xenvif *xenvif_alloc(struct device *parent, domid_t domid,
 	return vif;
 }
 
-int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
-		   unsigned long rx_ring_ref, unsigned int evtchn)
+int xenvif_connect(struct xenvif *vif,
+		   unsigned long tx_ring_ref[], unsigned int tx_ring_ref_count,
+		   unsigned long rx_ring_ref[], unsigned int rx_ring_ref_count,
+		   unsigned int tx_evtchn, unsigned int rx_evtchn)
 {
 	int err = -ENOMEM;
+	void *addr;
+	struct xen_netif_tx_sring *txs;
+	struct xen_netif_rx_sring *rxs;
+	int tmp[NETBK_MAX_RING_PAGES], i;
 
 	/* Already connected through? */
-	if (vif->irq)
+	if (vif->tx_irq)
 		return 0;
 
-	err = xen_netbk_map_frontend_rings(vif, tx_ring_ref, rx_ring_ref);
-	if (err < 0)
+	__module_get(THIS_MODULE);
+
+	for (i = 0; i < tx_ring_ref_count; i++)
+		tmp[i] = tx_ring_ref[i];
+
+	err = xenvif_map_frontend_ring(vif, &addr, vif->domid,
+				       tmp, tx_ring_ref_count);
+	if (err)
 		goto err;
+	txs = addr;
+	BACK_RING_INIT(&vif->tx, txs, PAGE_SIZE * tx_ring_ref_count);
+	vif->nr_tx_handles = tx_ring_ref_count;
 
-	err = bind_interdomain_evtchn_to_irqhandler(
-		vif->domid, evtchn, xenvif_interrupt, 0,
-		vif->dev->name, vif);
-	if (err < 0)
-		goto err_unmap;
-	vif->irq = err;
-	disable_irq(vif->irq);
+	for (i = 0; i < rx_ring_ref_count; i++)
+		tmp[i] = rx_ring_ref[i];
 
-	xenvif_get(vif);
+	err = xenvif_map_frontend_ring(vif, &addr, vif->domid,
+					tmp, rx_ring_ref_count);
+	if (err)
+		goto err_tx_unmap;
+	rxs = addr;
+	BACK_RING_INIT(&vif->rx, rxs, PAGE_SIZE * rx_ring_ref_count);
+	vif->nr_rx_handles = rx_ring_ref_count;
+
+	if (tx_evtchn == rx_evtchn) { /* feature-split-event-channels == 0 */
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, tx_evtchn, xenvif_interrupt, 0,
+			vif->dev->name, vif);
+		if (err < 0)
+			goto err_rx_unmap;
+		vif->tx_irq = vif->rx_irq = err;
+		disable_irq(vif->tx_irq);
+		disable_irq(vif->rx_irq);
+	} else {
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, tx_evtchn, xenvif_tx_interrupt, 0,
+			vif->dev->name, vif);
+		if (err < 0)
+			goto err_rx_unmap;
+		vif->tx_irq = err;
+		disable_irq(vif->tx_irq);
+
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, rx_evtchn, xenvif_rx_interrupt, 0,
+			vif->dev->name, vif);
+		if (err < 0) {
+			unbind_from_irqhandler(vif->tx_irq, vif);
+			goto err_rx_unmap;
+		}
+		vif->rx_irq = err;
+		disable_irq(vif->rx_irq);
+	}
+
+	init_waitqueue_head(&vif->wq);
+	vif->task = kthread_create(xenvif_kthread,
+				   (void *)vif,
+				   "vif%d.%d", vif->domid, vif->handle);
+	if (IS_ERR(vif->task)) {
+		pr_warn("Could not create kthread\n");
+		err = PTR_ERR(vif->task);
+		goto err_unbind;
+	}
 
 	rtnl_lock();
 	if (!vif->can_sg && vif->dev->mtu > ETH_DATA_LEN)
@@ -336,36 +425,59 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 		xenvif_up(vif);
 	rtnl_unlock();
 
+	wake_up_process(vif->task);
+
 	return 0;
-err_unmap:
-	xen_netbk_unmap_frontend_rings(vif);
+err_unbind:
+	if (vif->tx_irq == vif->rx_irq)
+		unbind_from_irqhandler(vif->tx_irq, vif);
+	else {
+		unbind_from_irqhandler(vif->tx_irq, vif);
+		unbind_from_irqhandler(vif->rx_irq, vif);
+	}
+err_rx_unmap:
+	xenvif_unmap_frontend_ring(vif, (void *)vif->tx.sring);
+err_tx_unmap:
+	xenvif_unmap_frontend_ring(vif, (void *)vif->rx.sring);
 err:
+	module_put(THIS_MODULE);
 	return err;
 }
 
 void xenvif_disconnect(struct xenvif *vif)
 {
 	struct net_device *dev = vif->dev;
+	int need_module_put = 0;
+
 	if (netif_carrier_ok(dev)) {
 		rtnl_lock();
 		netif_carrier_off(dev); /* discard queued packets */
 		if (netif_running(dev))
 			xenvif_down(vif);
 		rtnl_unlock();
-		xenvif_put(vif);
 	}
 
-	atomic_dec(&vif->refcnt);
-	wait_event(vif->waiting_to_free, atomic_read(&vif->refcnt) == 0);
+	if (vif->task)
+		kthread_stop(vif->task);
+
+	netif_napi_del(&vif->napi);
 
 	del_timer_sync(&vif->credit_timeout);
 
-	if (vif->irq)
-		unbind_from_irqhandler(vif->irq, vif);
+	if (vif->tx_irq) {
+		unbind_from_irqhandler(vif->tx_irq, vif);
+		need_module_put = 1;
+	}
+	if (vif->tx_irq != vif->rx_irq)
+		unbind_from_irqhandler(vif->rx_irq, vif);
 
 	unregister_netdev(vif->dev);
 
-	xen_netbk_unmap_frontend_rings(vif);
+	xenvif_unmap_frontend_ring(vif, (void *)vif->tx.sring);
+	xenvif_unmap_frontend_ring(vif, (void *)vif->rx.sring);
 
 	free_netdev(vif->dev);
+
+	if (need_module_put)
+		module_put(THIS_MODULE);
 }

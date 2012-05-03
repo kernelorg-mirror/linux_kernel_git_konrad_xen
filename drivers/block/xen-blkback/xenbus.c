@@ -122,7 +122,8 @@ static struct xen_blkif *xen_blkif_alloc(domid_t domid)
 	return blkif;
 }
 
-static int xen_blkif_map(struct xen_blkif *blkif, unsigned long shared_page,
+static int xen_blkif_map(struct xen_blkif *blkif, unsigned long shared_page[],
+			 int nr_pages,
 			 unsigned int evtchn)
 {
 	int err;
@@ -131,7 +132,8 @@ static int xen_blkif_map(struct xen_blkif *blkif, unsigned long shared_page,
 	if (blkif->irq)
 		return 0;
 
-	err = xenbus_map_ring_valloc(blkif->be->dev, shared_page, &blkif->blk_ring);
+	err = xenbus_map_ring_valloc(blkif->be->dev, shared_page,
+				     nr_pages, &blkif->blk_ring);
 	if (err < 0)
 		return err;
 
@@ -754,7 +756,7 @@ static int connect_ring(struct backend_info *be)
 		ring_ref, evtchn, be->blkif->blk_protocol, protocol);
 
 	/* Map the shared frame, irq etc. */
-	err = xen_blkif_map(be->blkif, ring_ref, evtchn);
+	err = xen_blkif_map(be->blkif, &ring_ref, 1, evtchn);
 	if (err) {
 		xenbus_dev_fatal(dev, err, "mapping ring-ref %lu port %u",
 				 ring_ref, evtchn);

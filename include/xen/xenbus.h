@@ -46,6 +46,10 @@
 #include <xen/interface/io/xenbus.h>
 #include <xen/interface/io/xs_wire.h>
 
+#define XENBUS_MAX_RING_PAGE_ORDER 2
+#define XENBUS_MAX_RING_PAGES      4
+#define INVALID_GRANT_HANDLE       (~0U)
+
 /* Register callback to watch this node. */
 struct xenbus_watch
 {
@@ -195,15 +199,16 @@ int xenbus_watch_pathfmt(struct xenbus_device *dev, struct xenbus_watch *watch,
 			 const char *pathfmt, ...);
 
 int xenbus_switch_state(struct xenbus_device *dev, enum xenbus_state new_state);
-int xenbus_grant_ring(struct xenbus_device *dev, unsigned long ring_mfn);
+int xenbus_grant_ring(struct xenbus_device *dev, void *vaddr,
+		      int nr_pages, int grefs[]);
 int xenbus_map_ring_valloc(struct xenbus_device *dev,
-			   int gnt_ref, void **vaddr);
-int xenbus_map_ring(struct xenbus_device *dev, int gnt_ref,
-			   grant_handle_t *handle, void *vaddr);
+			   int gnt_ref[], int nr_grefs, void **vaddr);
+int xenbus_map_ring(struct xenbus_device *dev, int gnt_ref[], int nr_grefs,
+			   grant_handle_t handle[], void *vaddr);
 
 int xenbus_unmap_ring_vfree(struct xenbus_device *dev, void *vaddr);
 int xenbus_unmap_ring(struct xenbus_device *dev,
-		      grant_handle_t handle, void *vaddr);
+		      grant_handle_t handle[], int nr_handles, void *vaddr);
 
 int xenbus_alloc_evtchn(struct xenbus_device *dev, int *port);
 int xenbus_bind_evtchn(struct xenbus_device *dev, int remote_port, int *port);

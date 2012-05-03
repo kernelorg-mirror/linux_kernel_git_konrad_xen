@@ -67,9 +67,18 @@ struct netfront_cb {
 
 #define GRANT_INVALID_REF	0
 
-#define NET_TX_RING_SIZE __CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE)
-#define NET_RX_RING_SIZE __CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE)
-#define TX_MAX_TARGET min_t(int, NET_TX_RING_SIZE, 256)
+#define XENNET_MAX_RING_PAGE_ORDER 2
+#define XENNET_MAX_RING_PAGES      (1U << XENNET_MAX_RING_PAGE_ORDER)
+
+#define NET_TX_RING_SIZE(_nr_pages)					\
+	__CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE * (_nr_pages))
+#define NET_RX_RING_SIZE(_nr_pages)					\
+	__CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE * (_nr_pages))
+
+#define XENNET_MAX_TX_RING_SIZE NET_TX_RING_SIZE(XENNET_MAX_RING_PAGES)
+#define XENNET_MAX_RX_RING_SIZE NET_RX_RING_SIZE(XENNET_MAX_RING_PAGES)
+
+#define TX_MAX_TARGET min_t(int, NET_TX_RING_SIZE(1), 256)
 
 struct netfront_stats {
 	u64			rx_packets;
@@ -85,12 +94,21 @@ struct netfront_info {
 
 	struct napi_struct napi;
 
-	unsigned int evtchn;
+	/* Statistics */
+	struct netfront_stats __percpu *stats;
+
+	unsigned long rx_gso_checksum_fixup;
+
+	unsigned int tx_evtchn, rx_evtchn;
+	unsigned int tx_irq, rx_irq;
+
 	struct xenbus_device *xbdev;
 
 	spinlock_t   tx_lock;
 	struct xen_netif_tx_front_ring tx;
-	int tx_ring_ref;
+	int tx_ring_ref[XENNET_MAX_RING_PAGES];
+	int tx_ring_page_order;
+	int tx_ring_pages;
 
 	/*
 	 * {tx,rx}_skbs store outstanding skbuffs. Free tx_skb entries
@@ -104,36 +122,33 @@ struct netfront_info {
 	union skb_entry {
 		struct sk_buff *skb;
 		unsigned long link;
-	} tx_skbs[NET_TX_RING_SIZE];
+	} tx_skbs[XENNET_MAX_TX_RING_SIZE];
 	grant_ref_t gref_tx_head;
-	grant_ref_t grant_tx_ref[NET_TX_RING_SIZE];
+	grant_ref_t grant_tx_ref[XENNET_MAX_TX_RING_SIZE];
 	unsigned tx_skb_freelist;
 
 	spinlock_t   rx_lock ____cacheline_aligned_in_smp;
 	struct xen_netif_rx_front_ring rx;
-	int rx_ring_ref;
+	int rx_ring_ref[XENNET_MAX_RING_PAGES];
+	int rx_ring_page_order;
+	int rx_ring_pages;
 
 	/* Receive-ring batched refills. */
 #define RX_MIN_TARGET 8
 #define RX_DFL_MIN_TARGET 64
-#define RX_MAX_TARGET min_t(int, NET_RX_RING_SIZE, 256)
+#define RX_MAX_TARGET min_t(int, NET_RX_RING_SIZE(1), 256)
 	unsigned rx_min_target, rx_max_target, rx_target;
 	struct sk_buff_head rx_batch;
 
 	struct timer_list rx_refill_timer;
 
-	struct sk_buff *rx_skbs[NET_RX_RING_SIZE];
+	struct sk_buff *rx_skbs[XENNET_MAX_RX_RING_SIZE];
 	grant_ref_t gref_rx_head;
-	grant_ref_t grant_rx_ref[NET_RX_RING_SIZE];
+	grant_ref_t grant_rx_ref[XENNET_MAX_RX_RING_SIZE];
 
-	unsigned long rx_pfn_array[NET_RX_RING_SIZE];
-	struct multicall_entry rx_mcl[NET_RX_RING_SIZE+1];
-	struct mmu_update rx_mmu[NET_RX_RING_SIZE];
-
-	/* Statistics */
-	struct netfront_stats __percpu *stats;
-
-	unsigned long rx_gso_checksum_fixup;
+	unsigned long rx_pfn_array[XENNET_MAX_RX_RING_SIZE];
+	struct multicall_entry rx_mcl[XENNET_MAX_RX_RING_SIZE+1];
+	struct mmu_update rx_mmu[XENNET_MAX_RX_RING_SIZE];
 };
 
 struct netfront_rx_info {
@@ -171,15 +186,15 @@ static unsigned short get_id_from_freelist(unsigned *head,
 	return id;
 }
 
-static int xennet_rxidx(RING_IDX idx)
+static int xennet_rxidx(RING_IDX idx, struct netfront_info *info)
 {
-	return idx & (NET_RX_RING_SIZE - 1);
+	return idx & (NET_RX_RING_SIZE(info->rx_ring_pages) - 1);
 }
 
 static struct sk_buff *xennet_get_rx_skb(struct netfront_info *np,
 					 RING_IDX ri)
 {
-	int i = xennet_rxidx(ri);
+	int i = xennet_rxidx(ri, np);
 	struct sk_buff *skb = np->rx_skbs[i];
 	np->rx_skbs[i] = NULL;
 	return skb;
@@ -188,7 +203,7 @@ static struct sk_buff *xennet_get_rx_skb(struct netfront_info *np,
 static grant_ref_t xennet_get_rx_ref(struct netfront_info *np,
 					    RING_IDX ri)
 {
-	int i = xennet_rxidx(ri);
+	int i = xennet_rxidx(ri, np);
 	grant_ref_t ref = np->grant_rx_ref[i];
 	np->grant_rx_ref[i] = GRANT_INVALID_REF;
 	return ref;
@@ -301,7 +316,7 @@ no_skb:
 
 		skb->dev = dev;
 
-		id = xennet_rxidx(req_prod + i);
+		id = xennet_rxidx(req_prod + i, np);
 
 		BUG_ON(np->rx_skbs[id]);
 		np->rx_skbs[id] = skb;
@@ -330,7 +345,7 @@ no_skb:
  push:
 	RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&np->rx, notify);
 	if (notify)
-		notify_remote_via_irq(np->netdev->irq);
+		notify_remote_via_irq(np->rx_irq);
 }
 
 static int xennet_open(struct net_device *dev)
@@ -563,7 +578,7 @@ static int xennet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&np->tx, notify);
 	if (notify)
-		notify_remote_via_irq(np->netdev->irq);
+		notify_remote_via_irq(np->tx_irq);
 
 	u64_stats_update_begin(&stats->syncp);
 	stats->tx_bytes += skb->len;
@@ -597,7 +612,7 @@ static int xennet_close(struct net_device *dev)
 static void xennet_move_rx_slot(struct netfront_info *np, struct sk_buff *skb,
 				grant_ref_t ref)
 {
-	int new = xennet_rxidx(np->rx.req_prod_pvt);
+	int new = xennet_rxidx(np->rx.req_prod_pvt, np);
 
 	BUG_ON(np->rx_skbs[new]);
 	np->rx_skbs[new] = skb;
@@ -1090,7 +1105,7 @@ static void xennet_release_tx_bufs(struct netfront_info *np)
 	struct sk_buff *skb;
 	int i;
 
-	for (i = 0; i < NET_TX_RING_SIZE; i++) {
+	for (i = 0; i < NET_TX_RING_SIZE(np->tx_ring_pages); i++) {
 		/* Skip over entries which are actually freelist references */
 		if (skb_entry_is_link(&np->tx_skbs[i]))
 			continue;
@@ -1124,7 +1139,7 @@ static void xennet_release_rx_bufs(struct netfront_info *np)
 
 	spin_lock_bh(&np->rx_lock);
 
-	for (id = 0; id < NET_RX_RING_SIZE; id++) {
+	for (id = 0; id < NET_RX_RING_SIZE(np->rx_ring_pages); id++) {
 		ref = np->grant_rx_ref[id];
 		if (ref == GRANT_INVALID_REF) {
 			unused++;
@@ -1230,22 +1245,36 @@ static int xennet_set_features(struct net_device *dev,
 	return 0;
 }
 
-static irqreturn_t xennet_interrupt(int irq, void *dev_id)
+static irqreturn_t xennet_tx_interrupt(int irq, void *dev_id)
 {
-	struct net_device *dev = dev_id;
-	struct netfront_info *np = netdev_priv(dev);
+	struct netfront_info *np = dev_id;
+	struct net_device *dev = np->netdev;
 	unsigned long flags;
 
 	spin_lock_irqsave(&np->tx_lock, flags);
-
-	if (likely(netif_carrier_ok(dev))) {
-		xennet_tx_buf_gc(dev);
-		/* Under tx_lock: protects access to rx shared-ring indexes. */
-		if (RING_HAS_UNCONSUMED_RESPONSES(&np->rx))
-			napi_schedule(&np->napi);
-	}
-
+	xennet_tx_buf_gc(dev);
 	spin_unlock_irqrestore(&np->tx_lock, flags);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t xennet_rx_interrupt(int irq, void *dev_id)
+{
+	struct netfront_info *np = dev_id;
+	struct net_device *dev = np->netdev;
+
+	if (likely(netif_carrier_ok(dev) &&
+		   RING_HAS_UNCONSUMED_RESPONSES(&np->rx)))
+		napi_schedule(&np->napi);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t xennet_interrupt(int irq, void *dev_id)
+{
+	xennet_tx_interrupt(irq, dev_id);
+
+	xennet_rx_interrupt(irq, dev_id);
 
 	return IRQ_HANDLED;
 }
@@ -1305,13 +1334,13 @@ static struct net_device * __devinit xennet_create_dev(struct xenbus_device *dev
 
 	/* Initialise tx_skbs as a free chain containing every entry. */
 	np->tx_skb_freelist = 0;
-	for (i = 0; i < NET_TX_RING_SIZE; i++) {
+	for (i = 0; i < XENNET_MAX_TX_RING_SIZE; i++) {
 		skb_entry_set_link(&np->tx_skbs[i], i+1);
 		np->grant_tx_ref[i] = GRANT_INVALID_REF;
 	}
 
 	/* Clear out rx_skbs */
-	for (i = 0; i < NET_RX_RING_SIZE; i++) {
+	for (i = 0; i < XENNET_MAX_RX_RING_SIZE; i++) {
 		np->rx_skbs[i] = NULL;
 		np->grant_rx_ref[i] = GRANT_INVALID_REF;
 	}
@@ -1409,13 +1438,6 @@ static int __devinit netfront_probe(struct xenbus_device *dev,
 	return err;
 }
 
-static void xennet_end_access(int ref, void *page)
-{
-	/* This frees the page as a side-effect */
-	if (ref != GRANT_INVALID_REF)
-		gnttab_end_foreign_access(ref, 0, (unsigned long)page);
-}
-
 static void xennet_disconnect_backend(struct netfront_info *info)
 {
 	/* Stop old i/f to prevent errors whilst we rebuild the state. */
@@ -1425,16 +1447,22 @@ static void xennet_disconnect_backend(struct netfront_info *info)
 	spin_unlock_irq(&info->tx_lock);
 	spin_unlock_bh(&info->rx_lock);
 
-	if (info->netdev->irq)
-		unbind_from_irqhandler(info->netdev->irq, info->netdev);
-	info->evtchn = info->netdev->irq = 0;
+	if (info->tx_irq && (info->tx_irq == info->rx_irq))
+		unbind_from_irqhandler(info->tx_irq, info);
+	if (info->tx_irq && (info->tx_irq != info->rx_irq)) {
+		unbind_from_irqhandler(info->tx_irq, info);
+		unbind_from_irqhandler(info->rx_irq, info);
+	}
 
-	/* End access and free the pages */
-	xennet_end_access(info->tx_ring_ref, info->tx.sring);
-	xennet_end_access(info->rx_ring_ref, info->rx.sring);
+	info->tx_evtchn = info->tx_irq = 0;
+	info->rx_evtchn = info->rx_irq = 0;
 
-	info->tx_ring_ref = GRANT_INVALID_REF;
-	info->rx_ring_ref = GRANT_INVALID_REF;
+	xenbus_unmap_ring_vfree(info->xbdev, (void *)info->tx.sring);
+	free_pages((unsigned long)info->tx.sring, info->tx_ring_page_order);
+
+	xenbus_unmap_ring_vfree(info->xbdev, (void *)info->rx.sring);
+	free_pages((unsigned long)info->rx.sring, info->rx_ring_page_order);
+
 	info->tx.sring = NULL;
 	info->rx.sring = NULL;
 }
@@ -1477,15 +1505,88 @@ static int xen_net_read_mac(struct xenbus_device *dev, u8 mac[])
 	return 0;
 }
 
+static int setup_netfront_single(struct netfront_info *info)
+{
+	int err;
+
+	err = xenbus_alloc_evtchn(info->xbdev, &info->tx_evtchn);
+
+	if (err < 0)
+		goto fail;
+
+	err = bind_evtchn_to_irqhandler(info->tx_evtchn,
+					xennet_interrupt,
+					0, info->netdev->name, info);
+	if (err < 0)
+		goto bind_fail;
+	info->rx_evtchn = info->tx_evtchn;
+	info->rx_irq = info->tx_irq = err;
+	dev_info(&info->xbdev->dev, "single event channel, irq = %d\n",
+		 info->tx_irq);
+
+	return 0;
+
+bind_fail:
+	xenbus_free_evtchn(info->xbdev, info->tx_evtchn);
+fail:
+	return err;
+}
+
+static int setup_netfront_split(struct netfront_info *info)
+{
+	int err;
+
+	err = xenbus_alloc_evtchn(info->xbdev, &info->tx_evtchn);
+	if (err)
+		goto fail;
+	err = xenbus_alloc_evtchn(info->xbdev, &info->rx_evtchn);
+	if (err)
+		goto alloc_rx_evtchn_fail;
+
+	err = bind_evtchn_to_irqhandler(info->tx_evtchn,
+					xennet_tx_interrupt,
+					0, info->netdev->name, info);
+	if (err < 0)
+		goto bind_tx_fail;
+	info->tx_irq = err;
+	err = bind_evtchn_to_irqhandler(info->rx_evtchn,
+					xennet_rx_interrupt,
+					0, info->netdev->name, info);
+	if (err < 0)
+		goto bind_rx_fail;
+
+	info->rx_irq = err;
+	dev_info(&info->xbdev->dev, "split event channels,"
+		 " tx_irq = %d, rx_irq = %d\n",
+		 info->tx_irq, info->rx_irq);
+
+
+	return 0;
+
+bind_rx_fail:
+	unbind_from_irqhandler(info->tx_irq, info);
+bind_tx_fail:
+	xenbus_free_evtchn(info->xbdev, info->rx_evtchn);
+alloc_rx_evtchn_fail:
+	xenbus_free_evtchn(info->xbdev, info->tx_evtchn);
+fail:
+	return err;
+}
+
 static int setup_netfront(struct xenbus_device *dev, struct netfront_info *info)
 {
 	struct xen_netif_tx_sring *txs;
 	struct xen_netif_rx_sring *rxs;
 	int err;
+	unsigned int feature_split_evtchn;
 	struct net_device *netdev = info->netdev;
+	unsigned int max_tx_ring_page_order, max_rx_ring_page_order;
+	int i;
 
-	info->tx_ring_ref = GRANT_INVALID_REF;
-	info->rx_ring_ref = GRANT_INVALID_REF;
+	for (i = 0; i < XENNET_MAX_RING_PAGES; i++) {
+		info->tx_ring_ref[i] = GRANT_INVALID_REF;
+		info->rx_ring_ref[i] = GRANT_INVALID_REF;
+	}
 	info->rx.sring = NULL;
 	info->tx.sring = NULL;
 	netdev->irq = 0;
@@ -1496,50 +1597,94 @@ static int setup_netfront(struct xenbus_device *dev, struct netfront_info *info)
 		goto fail;
 	}
 
-	txs = (struct xen_netif_tx_sring *)get_zeroed_page(GFP_NOIO | __GFP_HIGH);
+	err = xenbus_scanf(XBT_NIL, info->xbdev->otherend,
+			   "feature-split-event-channels", "%u",
+			   &feature_split_evtchn);
+
+	if (err < 0)
+		feature_split_evtchn = 0;
+
+	err = xenbus_scanf(XBT_NIL, info->xbdev->otherend,
+			   "max-tx-ring-page-order", "%u",
+			   &max_tx_ring_page_order);
+	if (err < 0) {
+		info->tx_ring_page_order = 0;
+		dev_info(&dev->dev, "single tx ring\n");
+	} else {
+		info->tx_ring_page_order = max_tx_ring_page_order;
+		dev_info(&dev->dev, "multi page tx ring, order = %d\n",
+			 max_tx_ring_page_order);
+	}
+	info->tx_ring_pages = (1U << info->tx_ring_page_order);
+
+	txs = (struct xen_netif_tx_sring *)
+		__get_free_pages(__GFP_ZERO | GFP_NOIO | __GFP_HIGH,
+				 info->tx_ring_page_order);
 	if (!txs) {
 		err = -ENOMEM;
 		xenbus_dev_fatal(dev, err, "allocating tx ring page");
 		goto fail;
 	}
 	SHARED_RING_INIT(txs);
-	FRONT_RING_INIT(&info->tx, txs, PAGE_SIZE);
+	FRONT_RING_INIT(&info->tx, txs, PAGE_SIZE * info->tx_ring_pages);
 
-	err = xenbus_grant_ring(dev, virt_to_mfn(txs));
+	err = xenbus_grant_ring(dev, txs, info->tx_ring_pages,
+				info->tx_ring_ref);
+
+	if (err < 0)
+		goto grant_tx_ring_fail;
+
+	err = xenbus_scanf(XBT_NIL, info->xbdev->otherend,
+			   "max-rx-ring-page-order", "%u",
+			   &max_rx_ring_page_order);
 	if (err < 0) {
-		free_page((unsigned long)txs);
-		goto fail;
+		info->rx_ring_page_order = 0;
+		dev_info(&dev->dev, "single rx ring\n");
+	} else {
+		info->rx_ring_page_order = max_rx_ring_page_order;
+		dev_info(&dev->dev, "multi page rx ring, order = %d\n",
+			 max_rx_ring_page_order);
 	}
+	info->rx_ring_pages = (1U << info->rx_ring_page_order);
 
-	info->tx_ring_ref = err;
-	rxs = (struct xen_netif_rx_sring *)get_zeroed_page(GFP_NOIO | __GFP_HIGH);
+	rxs = (struct xen_netif_rx_sring *)
+		__get_free_pages(__GFP_ZERO | GFP_NOIO | __GFP_HIGH,
+				 info->rx_ring_page_order);
 	if (!rxs) {
 		err = -ENOMEM;
 		xenbus_dev_fatal(dev, err, "allocating rx ring page");
-		goto fail;
+		goto alloc_rx_ring_fail;
 	}
 	SHARED_RING_INIT(rxs);
-	FRONT_RING_INIT(&info->rx, rxs, PAGE_SIZE);
+	FRONT_RING_INIT(&info->rx, rxs, PAGE_SIZE * info->rx_ring_pages);
 
-	err = xenbus_grant_ring(dev, virt_to_mfn(rxs));
-	if (err < 0) {
-		free_page((unsigned long)rxs);
-		goto fail;
-	}
-	info->rx_ring_ref = err;
+	err = xenbus_grant_ring(dev, rxs, info->rx_ring_pages,
+				info->rx_ring_ref);
 
-	err = xenbus_alloc_evtchn(dev, &info->evtchn);
-	if (err)
-		goto fail;
-
-	err = bind_evtchn_to_irqhandler(info->evtchn, xennet_interrupt,
-					0, netdev->name, netdev);
 	if (err < 0)
-		goto fail;
-	netdev->irq = err;
+		goto grant_rx_ring_fail;
+
+	FRONT_RING_INIT(&info->rx, rxs, PAGE_SIZE * info->rx_ring_pages);
+
+	if (!feature_split_evtchn)
+		err = setup_netfront_single(info);
+	else
+		err = setup_netfront_split(info);
+
+	if (err)
+		goto setup_evtchn_failed;
+
 	return 0;
 
- fail:
+setup_evtchn_failed:
+	xenbus_unmap_ring_vfree(info->xbdev, (void *)info->rx.sring);
+grant_rx_ring_fail:
+	free_pages((unsigned long)info->rx.sring, info->rx_ring_page_order);
+alloc_rx_ring_fail:
+	xenbus_unmap_ring_vfree(info->xbdev, (void *)info->tx.sring);
+grant_tx_ring_fail:
+	free_pages((unsigned long)info->tx.sring, info->tx_ring_page_order);
+fail:
 	return err;
 }
 
@@ -1550,6 +1695,7 @@ static int talk_to_netback(struct xenbus_device *dev,
 	const char *message;
 	struct xenbus_transaction xbt;
 	int err;
+	int i;
 
 	/* Create shared ring, alloc event channel. */
 	err = setup_netfront(dev, info);
@@ -1563,23 +1709,71 @@ again:
 		goto destroy_ring;
 	}
 
-	err = xenbus_printf(xbt, dev->nodename, "tx-ring-ref", "%u",
-			    info->tx_ring_ref);
-	if (err) {
-		message = "writing tx ring-ref";
-		goto abort_transaction;
+	if (info->tx_ring_page_order == 0)
+		err = xenbus_printf(xbt, dev->nodename, "tx-ring-ref", "%u",
+				    info->tx_ring_ref[0]);
+	else {
+		err = xenbus_printf(xbt, dev->nodename, "tx-ring-order", "%u",
+				    info->tx_ring_page_order);
+		if (err) {
+			message = "writing tx ring-ref";
+			goto abort_transaction;
+		}
+		for (i = 0; i < info->tx_ring_pages; i++) {
+			char name[sizeof("tx-ring-ref")+2];
+			snprintf(name, sizeof(name), "tx-ring-ref%u", i);
+			err = xenbus_printf(xbt, dev->nodename, name, "%u",
+					    info->tx_ring_ref[i]);
+			if (err) {
+				message = "writing tx ring-ref";
+				goto abort_transaction;
+			}
+		}
 	}
-	err = xenbus_printf(xbt, dev->nodename, "rx-ring-ref", "%u",
-			    info->rx_ring_ref);
-	if (err) {
-		message = "writing rx ring-ref";
-		goto abort_transaction;
+
+	if (info->rx_ring_page_order == 0)
+		err = xenbus_printf(xbt, dev->nodename, "rx-ring-ref", "%u",
+				    info->rx_ring_ref[0]);
+	else {
+		err = xenbus_printf(xbt, dev->nodename, "rx-ring-order", "%u",
+				    info->rx_ring_page_order);
+		if (err) {
+			message = "writing tx ring-ref";
+			goto abort_transaction;
+		}
+		for (i = 0; i < info->rx_ring_pages; i++) {
+			char name[sizeof("rx-ring-ref")+2];
+			snprintf(name, sizeof(name), "rx-ring-ref%u", i);
+			err = xenbus_printf(xbt, dev->nodename, name, "%u",
+					    info->rx_ring_ref[i]);
+			if (err) {
+				message = "writing rx ring-ref";
+				goto abort_transaction;
+			}
+		}
 	}
-	err = xenbus_printf(xbt, dev->nodename,
-			    "event-channel", "%u", info->evtchn);
-	if (err) {
-		message = "writing event-channel";
-		goto abort_transaction;
+
+
+	if (info->tx_evtchn == info->rx_evtchn) {
+		err = xenbus_printf(xbt, dev->nodename,
+				    "event-channel", "%u", info->tx_evtchn);
+		if (err) {
+			message = "writing event-channel";
+			goto abort_transaction;
+		}
+	} else {
+		err = xenbus_printf(xbt, dev->nodename,
+				    "event-channel-tx", "%u", info->tx_evtchn);
+		if (err) {
+			message = "writing event-channel-tx";
+			goto abort_transaction;
+		}
+		err = xenbus_printf(xbt, dev->nodename,
+				    "event-channel-rx", "%u", info->rx_evtchn);
+		if (err) {
+			message = "writing event-channel-rx";
+			goto abort_transaction;
+		}
 	}
 
 	err = xenbus_printf(xbt, dev->nodename, "request-rx-copy", "%u",
@@ -1661,7 +1855,8 @@ static int xennet_connect(struct net_device *dev)
 	xennet_release_tx_bufs(np);
 
 	/* Step 2: Rebuild the RX buffer freelist and the RX ring itself. */
-	for (requeue_idx = 0, i = 0; i < NET_RX_RING_SIZE; i++) {
+	for (requeue_idx = 0, i = 0; i < NET_RX_RING_SIZE(np->rx_ring_pages);
+	     i++) {
 		skb_frag_t *frag;
 		const struct page *page;
 		if (!np->rx_skbs[i])
@@ -1692,7 +1887,9 @@ static int xennet_connect(struct net_device *dev)
 	 * packets.
 	 */
 	netif_carrier_on(np->netdev);
-	notify_remote_via_irq(np->netdev->irq);
+	notify_remote_via_irq(np->tx_irq);
+	if (np->tx_irq != np->rx_irq)
+		notify_remote_via_irq(np->rx_irq);
 	xennet_tx_buf_gc(dev);
 	xennet_alloc_rx_buffers(dev);
 
