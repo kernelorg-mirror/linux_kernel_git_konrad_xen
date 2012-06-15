@@ -80,6 +80,7 @@
 #define VIRQ_CONSOLE    2  /* (DOM0) Bytes received on emergency console. */
 #define VIRQ_DOM_EXC    3  /* (DOM0) Exceptional event for some domain.   */
 #define VIRQ_DEBUGGER   6  /* (DOM0) A domain has paused for debugging.   */
+#define VIRQ_XENOPROF   7  /* V. XenOprofile interrupt: new sample available */
 
 /* Architecture-specific VIRQ definitions. */
 #define VIRQ_ARCH_0    16
