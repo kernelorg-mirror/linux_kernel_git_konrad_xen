@@ -289,13 +289,14 @@ static int __init oprofile_init(void)
 		oprofile_arch_exit_func = oprofile_arch_exit;
 	}
 
+
 	/* always init architecture to setup backtrace support */
 	timer_mode = 0;
-	err = oprofile_arch_init(&oprofile_ops);
+	err = oprofile_arch_init_func(&oprofile_ops);
 	if (!err) {
 		if (!timer && !oprofilefs_register())
 			return 0;
-		oprofile_arch_exit();
+		oprofile_arch_exit_func();
 	}
 
 	/* setup timer mode: */
