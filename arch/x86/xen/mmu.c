@@ -84,7 +84,6 @@
  */
 DEFINE_SPINLOCK(xen_reservation_lock);
 
-#ifdef CONFIG_X86_32
 /*
  * Identity map, in addition to plain kernel map.  This needs to be
  * large enough to allocate page table pages to allocate the rest.
@@ -92,7 +91,7 @@ DEFINE_SPINLOCK(xen_reservation_lock);
  */
 #define LEVEL1_IDENT_ENTRIES	(PTRS_PER_PTE * 4)
 static RESERVE_BRK_ARRAY(pte_t, level1_ident_pgt, LEVEL1_IDENT_ENTRIES);
-#endif
+
 #ifdef CONFIG_X86_64
 /* l3 pud for userspace vsyscall mapping */
 static pud_t level3_user_vsyscall[PTRS_PER_PUD] __page_aligned_bss;
@@ -1162,9 +1161,86 @@ static void xen_exit_mmap(struct mm_struct *mm)
 
 	spin_unlock(&mm->page_table_lock);
 }
+#ifdef CONFIG_X86_64
 
+/* TODO: For right now... */
+#define DEBUG 1
+
+#ifdef DEBUG
+static inline pud_t *pud_offset_va(pgd_t *pgd, unsigned long index)
+{
+	return (pud_t *)pgd_page_vaddr(*pgd) + index;
+}
+static inline pmd_t *pmd_offset_va(pud_t *pud, unsigned long index)
+{
+	return (pmd_t *)pud_page_vaddr(*pud) + index;
+}
+static inline pte_t *pte_offset(pmd_t *pmd, unsigned long index)
+{
+	return (pte_t *)pmd_page_vaddr(*pmd) + index;
+}
+static void __init xen_walk_pmd(void)
+{
+	unsigned long pmdidx;
+	unsigned long pteidx;
+
+	pgd_t *pgd_ka = &(init_level4_pgt[511]);
+	pgd_t *pgd_va = &(init_level4_pgt[272]);
+	pud_t *pud_ka, *pud_va;
+	pmd_t *pmd_ka, *pmd_va;
+
+	pud_va = pud_offset_va(pgd_va, 0);
+	if (pud_none(*pud_va))
+		return;
+	pud_ka = pud_offset_va(pgd_ka, 510);
+	if (pud_none(*pud_ka))
+		return;
+
+	for (pmdidx = 0; pmdidx < PTRS_PER_PMD; pmdidx++) {
+		int s, e;
+		pte_t *va_pte, *ka_pte;
+		int va_empty, ka_empty;
+
+		pmd_va = pmd_offset_va(pud_va, pmdidx);
+		pmd_ka = pmd_offset_va(pud_ka, pmdidx);
+		if (pmd_va == pmd_ka)
+			continue;
+		if (pmd_none(*pmd_va)) {
+			printk(KERN_DEBUG "PMD[0x%lx] in __va is empty\n", pmdidx);
+			continue;
+		}
+		if (pmd_none(*pmd_ka)) {
+			printk(KERN_DEBUG "PMD[0x%lx] in __kva is empty\n", pmdidx);
+			continue;
+		}
+		s = e = -1;
+		va_empty = ka_empty = 0;
+		for (pteidx = 0; pteidx < PTRS_PER_PTE; pteidx++) {
+			va_pte = pte_offset(pmd_va, pteidx);
+			ka_pte = pte_offset(pmd_ka, pteidx);
+			if (va_pte == ka_pte)
+				continue;
+			if (s == -1) {
+				s = e = pteidx;
+			}
+			if (pteidx > e)
+				e = pteidx;
+			if (pte_none(*va_pte))
+				va_empty++;
+			if (pte_none(*ka_pte))
+				ka_empty++;
+		}
+		if (s != -1)
+			printk(KERN_DEBUG "PMD[0x%lx] PTE entries differ: [0x%x->0x%x] with __va having %d empty and __kva %d\n", pmdidx, s, e, va_empty, ka_empty);
+	}
+}
+#endif
+#endif
 static void __init xen_pagetable_setup_start(pgd_t *base)
 {
+#ifdef DEBUG
+	xen_walk_pmd();
+#endif
 }
 
 static __init void xen_mapping_pagetable_reserve(u64 start, u64 end)
@@ -1182,11 +1258,44 @@ static __init void xen_mapping_pagetable_reserve(u64 start, u64 end)
 }
 
 static void xen_post_allocator_init(void);
-
+#ifdef CONFIG_X86_64
+struct xen_zap_regions {
+	unsigned long start;
+	unsigned long end;
+	unsigned long pa_start;
+	unsigned long pa_end;
+};
+#define XEN_ZAP_REGION 2
+struct xen_zap_regions zap_region[XEN_ZAP_REGION]__initdata;
+void __init xen_remove_kva_entries(const char *, unsigned long , unsigned long);
+static void *__ka(phys_addr_t);
+#endif
 static void __init xen_pagetable_setup_done(pgd_t *base)
 {
 	xen_setup_shared_info();
+#ifdef DEBUG
+	xen_walk_pmd();
+#endif
+#ifdef CONFIG_X86_64
+	zap_region[0].start = (unsigned long)__ka(zap_region[0].pa_start);
+	zap_region[0].end = (unsigned long)__ka(zap_region[0].pa_end);
+
+	zap_region[1].start = (unsigned long)__ka(zap_region[1].pa_start);
+	zap_region[1].end = (unsigned long)__ka(zap_region[1].pa_end);
+
+	/* Do not update the __va space as the __va already has the PTE tables
+ 	 * pointing to these PTE page tables. */
+	xen_remove_kva_entries("PT #1", zap_region[0].start, zap_region[0].end);
+	xen_remove_kva_entries("PT #2", zap_region[1].start, zap_region[1].end);
+#endif
+	/* But perhaps we should do it for the whole thing? */
 	xen_post_allocator_init();
+#ifdef DEBUG
+	xen_walk_pmd();
+#endif
+#ifdef CONFIG_X86_64
+	xen_start_info->pt_base = (unsigned long)__va(__pa(xen_start_info->pt_base));
+#endif
 }
 
 static void xen_write_cr2(unsigned long cr2)
@@ -1398,6 +1507,9 @@ static pte_t __init mask_rw_pte(pte_t *ptep, pte_t pte)
 	return pte;
 }
 #else /* CONFIG_X86_64 */
+
+static unsigned long pt_base_start __initdata;
+static unsigned long pt_base_end  __initdata;
 static pte_t __init mask_rw_pte(pte_t *ptep, pte_t pte)
 {
 	unsigned long pfn = pte_pfn(pte);
@@ -1411,6 +1523,10 @@ static pte_t __init mask_rw_pte(pte_t *ptep, pte_t pte)
 	if (((!is_early_ioremap_ptep(ptep) &&
 			pfn >= pgt_buf_start && pfn < pgt_buf_top)) ||
 			(is_early_ioremap_ptep(ptep) && pfn != (pgt_buf_end - 1)))
+		pte = pte_wrprotect(pte);
+
+	if ((!is_early_ioremap_ptep(ptep) &&
+			pfn >= pt_base_start && pfn < pt_base_end))
 		pte = pte_wrprotect(pte);
 
 	return pte;
@@ -1681,6 +1797,238 @@ static void __init xen_map_identity_early(pmd_t *pmd, unsigned long max_pfn)
 	set_page_prot(pmd, PAGE_KERNEL_RO);
 }
 #endif
+
+#ifdef CONFIG_X86_64
+static inline unsigned long pgd_page_kva(pgd_t pgd)
+{
+	return (unsigned long)__ka((unsigned long)pgd_val(pgd) & PTE_PFN_MASK);
+}
+static inline pud_t *kva_pud_offset(pgd_t *pgd, unsigned long address)
+{
+	return (pud_t *)pgd_page_kva(*pgd) + pud_index(address);
+}
+
+/* Find an entry in the second-level page table.. */
+static inline unsigned long pud_page_kva(pud_t pud)
+{
+	return (unsigned long)__ka((unsigned long)pud_val(pud) & PTE_PFN_MASK);
+}
+static inline pmd_t *kva_pmd_offset(pud_t *pud, unsigned long address)
+{
+	return (pmd_t *)pud_page_kva(*pud) + pmd_index(address);
+}
+
+/* And third level */
+static inline unsigned long pmd_page_kva(pmd_t pmd)
+{
+	return (unsigned long)__ka(pmd_val(pmd) & PTE_PFN_MASK);
+}
+/*
+ * This is a bit of chicken-and-egg problem. We have a nice routine
+ * called lookup_address that on first glance looks like could be used
+ * here. The lookup_addresses however, uses __va for the pagetable
+ * entries - which at certain stage of bootup is OK. However at this
+ * stage, where we are still using Xen's provided page-tables, there
+ * is nothing at pgd[pgd_index(__PAGE_OFFSET)].pgd.
+ *
+ * So we use an variant of lookup_address that uses the __START_kernel_map
+ * virtual addresses.
+ */
+static unsigned long __init find_kva_pte_t(unsigned long address)
+{
+	pgd_t *pgd = &(init_level4_pgt[pgd_index(address)]);
+	pud_t *pud;
+	pmd_t *pmd;
+
+	if (pgd_none(*pgd))
+		return 0;
+
+	pud = kva_pud_offset(pgd, address);
+	if (pud_none(*pud))
+		return 0;
+
+	if (pud_large(*pud) || !pud_present(*pud))
+		return (unsigned long)pud;
+
+	pmd = kva_pmd_offset(pud, address);
+	if (pmd_none(*pmd))
+		return 0;
+
+	if (pmd_large(*pmd) || !pmd_present(*pmd))
+		return (unsigned long)pmd;
+
+	pr_debug("  %lx:PTE is %ld bytes in, or %ld slot\n", address,
+		(unsigned long)(pmd_page_kva(*pmd)) - xen_start_info->pt_base,
+		((unsigned long)pmd_page_kva(*pmd) - xen_start_info->pt_base) / PAGE_SIZE);
+	return pmd_page_kva(*pmd);
+}
+void __init xen_replace_pagetables(pmd_t *pmd)
+{
+
+	unsigned pmdidx, pteidx;
+	unsigned ident_pte;
+	unsigned i;
+	unsigned long addr;
+
+	/* Rip out from PT_base to PTE table that covers _text */
+	zap_region[0].pa_start = __pa(xen_start_info->pt_base);
+	zap_region[0].start = (unsigned long)__va(xen_start_info->pt_base);
+
+	addr = find_kva_pte_t((unsigned long)__va(__pa(&_text)));
+	zap_region[0].pa_end = __pa(addr);
+	zap_region[0].end = (unsigned long)__va(zap_region[0].pa_end);
+
+	/* And then from PTE entry that covers _brk to the end of the pagetable.*/
+	addr = find_kva_pte_t((unsigned long)__va(__pa(&_end)));
+	zap_region[1].pa_start = (unsigned long)(__pa(addr));
+	zap_region[1].start = (unsigned long)__va(zap_region[1].pa_start);
+
+	addr =  roundup((unsigned long)xen_start_info->pt_base + (xen_start_info->nr_pt_frames * PAGE_SIZE), PAGE_SIZE);
+	if (addr > MODULES_VADDR)
+		printk(KERN_WARNING "xen: Pagetables %lx are in modules space! Trying to clean up.\n", addr);
+
+	zap_region[1].pa_end = __pa(addr);
+	zap_region[1].end = (unsigned long)__va(zap_region[1].pa_end);
+
+	/*
+	 * Our job is to "eradicate" from L2, and L1 the ranges
+	 * which are based on __va virtual address (__PAGE_OFFSET). The
+	 * hitch is that L2 (level2_ident_pgt) entries point to the _same_
+	 * entries that the L2 that is used for the __kva virtual address
+	 * (so __START_KERNEL_map or level2_kernel_pgt) based. We cannot rip
+	 * the ranges out otherwise access to the _kva won't function anymore.
+	 *
+	 * Instead of that, we are going to make the PMD in the __va
+	 * space for the boundries point to a new PMD and copy in the new
+	 * PMD the PTE addresses from the old one (up to the ranges).
+	 */
+
+	level1_ident_pgt = extend_brk(sizeof(pte_t) * PTRS_PER_PTE * XEN_ZAP_REGION * 2,
+				      PAGE_SIZE);
+
+	ident_pte = 0;
+	for (i = 0; i < ARRAY_SIZE(zap_region); i++) {
+		unsigned pmdidx_start, pmdidx_end;
+
+		if (!zap_region[i].start)
+			continue;
+
+		if (!zap_region[i].end)
+			continue;
+		pmdidx_start = pmd_index(zap_region[i].start);
+		pmdidx_end = pmd_index(zap_region[i].end);
+#ifdef DEBUG
+		printk(KERN_DEBUG "Considering PMD[%x->%x], va: %lx->%lx [%lx->%lx]\n", pmdidx_start, pmdidx_end,
+				zap_region[i].start, zap_region[i].end, zap_region[i].pa_start, zap_region[i].pa_end);
+#endif
+		/* This should not happen. */
+		if (WARN_ON(pmdidx_start > pmdidx_end))
+			break;
+
+		for (pmdidx = pmdidx_start; pmdidx <= pmdidx_end; pmdidx ++) {
+			pte_t *pte_page;
+			unsigned pteidx_start, pteidx_end;
+
+			if (!pmd_present(pmd[pmdidx]))
+				continue;
+
+			pte_page = m2v(pmd[pmdidx].pmd);
+			if ((pmdidx == pmdidx_start) || (pmdidx == pmdidx_end)) {
+				/* Double check whether we already had allocated it */
+				if ((pte_page >= level1_ident_pgt) && (pte_page <= &level1_ident_pgt[ident_pte]))
+					continue;
+				/* Copy the old PTE entries */
+				memcpy(&level1_ident_pgt[ident_pte], pte_page, PAGE_SIZE);
+
+				pte_page = &level1_ident_pgt[ident_pte];
+				ident_pte += PTRS_PER_PTE;
+				if (pmdidx == pmdidx_start) {
+					pteidx_start = pte_index(zap_region[i].start);
+					pteidx_end = PTRS_PER_PTE;
+				} else {
+					pteidx_start = 0;
+					pteidx_end = pte_index(zap_region[i].end);
+				}
+				/* If it all is done within a PMD */
+				if (pmdidx_start == pmdidx_end) {
+					pteidx_start = pte_index(zap_region[i].start);
+					pteidx_end = pte_index(zap_region[i].end);
+				}
+#ifdef DEBUG
+				printk(KERN_DEBUG "  PMD[0x%x]PTE[%x->%x] ZAP\n", pmdidx, pteidx_start, pteidx_end);
+#endif
+				for (pteidx = pteidx_start; pteidx <= pteidx_end; pteidx++)
+					pte_page[pteidx] = __pte_ma(0); /* ZAP */
+
+				set_page_prot(pte_page, PAGE_KERNEL_RO);
+				pmd[pmdidx] = __pmd(__pa(pte_page) | _PAGE_TABLE);
+			} else
+				pmd[pmdidx] = __pmd_ma(0); /* ZAP */
+			/* Done! */
+		}
+	}
+	/* The end result should be a PMD that in most cases looks like the
+ 	 * level2_kernel_pgt with two PMD entries replaced. */
+#ifdef DEBUG
+	for (pmdidx = 0; pmdidx < PTRS_PER_PMD; pmdidx++) {
+		int s, e;
+		pte_t *s_pte, *d_pte;
+		if (level2_kernel_pgt[pmdidx].pmd == level2_ident_pgt[pmdidx].pmd)
+			continue;
+		s = e = -1;
+		s_pte= m2v(level2_kernel_pgt[pmdidx].pmd);
+		d_pte= m2v(level2_ident_pgt[pmdidx].pmd);
+		for (pteidx = 0; pteidx < PTRS_PER_PTE; pteidx++) {
+			if (s_pte[pteidx].pte == d_pte[pteidx].pte)
+				continue;
+			if (s == -1) {
+				s = e = pteidx;
+			}
+			if (pteidx > e)
+				e = pteidx;
+		}
+		printk(KERN_DEBUG "PMD[0x%x] PTE entries differ: [0x%x->0x%x]\n", pmdidx, s, e);
+	}
+#endif
+	set_page_prot(pmd, PAGE_KERNEL_RO);
+	pin_pagetable_pfn(MMUEXT_PIN_L2_TABLE, PFN_DOWN(__pa(pmd)));
+}
+void __init __xen_remove_pt_entries(const char *name, unsigned long start, unsigned long end, bool revector)
+{
+#ifdef DEBUG
+	printk(KERN_DEBUG "%s %s %lx->%lx\n", name, revector ? "Revectoring" : "Ripping out", start, end);
+#endif
+	for (; start < end; start += PAGE_SIZE) {
+		unsigned long old_addr, uninitialized_var(new_addr);
+		unsigned long phys;
+		pte_t pte;
+
+		old_addr = (unsigned long)start;
+		if (revector) {
+			phys = __pa(start);
+			pte = pfn_pte(phys >> PAGE_SHIFT, PAGE_KERNEL_EXEC);
+
+			new_addr = (unsigned long)__va(phys);
+		}
+		/* Destroy the kva addr */
+		if (HYPERVISOR_update_va_mapping(old_addr, __pte_ma(0), UVMF_ALL))
+			BUG();
+		if (revector) {
+			/* and install the va addr */
+			if (HYPERVISOR_update_va_mapping(new_addr, pte, UVMF_ALL))
+				BUG();
+		}
+	}
+}
+void __init xen_remove_kva_entries(const char *name, unsigned long start, unsigned long end)
+{
+	__xen_remove_pt_entries(name, start, end, false);
+}
+void __init xen_revector_kva_entries(const char *name, unsigned long start, unsigned long end)
+{
+	__xen_remove_pt_entries(name, start, end, true);
+}
+#endif
 void __init xen_setup_machphys_mapping(void)
 {
 	struct xen_machphys_mapping mapping;
@@ -1731,6 +2079,9 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	 * set max_pfn_mapped to the last real pfn mapped. */
 	max_pfn_mapped = PFN_DOWN(__pa(xen_start_info->mfn_list));
 
+	pt_base_start = PFN_DOWN(__pa(xen_start_info->pt_base));
+	pt_base_end = PFN_DOWN(__pa(xen_start_info->pt_base + (xen_start_info->nr_pt_frames * PAGE_SIZE)));
+
 	/* Zap identity mapping */
 	init_level4_pgt[0] = __pgd(0);
 
@@ -1760,9 +2111,11 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	/* Get [511][510] and graft that in level2_fixmap_pgt */
 	l3 = m2v(pgd[pgd_index(__START_KERNEL_map + PMD_SIZE)].pgd);
 	l2 = m2v(l3[pud_index(__START_KERNEL_map + PMD_SIZE)].pud);
+
 	memcpy(level2_fixmap_pgt, l2, sizeof(pmd_t) * PTRS_PER_PMD);
-	/* Note that we don't do anything with level1_fixmap_pgt which
-	 * we don't need. */
+
+	/* TODO: Describe this in detail. */
+	xen_replace_pagetables(level2_ident_pgt);
 
 	/* Make pagetable pieces RO */
 	set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
@@ -1779,20 +2132,31 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	/* Unpin Xen-provided one */
 	pin_pagetable_pfn(MMUEXT_UNPIN_TABLE, PFN_DOWN(__pa(pgd)));
 
-	/* Switch over */
-	pgd = init_level4_pgt;
-
 	/*
 	 * At this stage there can be no user pgd, and no page
 	 * structure to attach it to, so make sure we just set kernel
 	 * pgd.
 	 */
 	xen_mc_batch();
-	__xen_write_cr3(true, __pa(pgd));
+	__xen_write_cr3(true, __pa(init_level4_pgt));
 	xen_mc_issue(PARAVIRT_LAZY_CPU);
 
 	memblock_reserve(__pa(xen_start_info->pt_base),
-			 xen_start_info->nr_pt_frames * PAGE_SIZE);
+			 (xen_start_info->nr_pt_frames * PAGE_SIZE));
+
+	xen_revector_kva_entries("xen_start_info", (unsigned long)xen_start_info,
+				(unsigned long)xen_start_info + PAGE_SIZE);
+	xen_start_info = (struct start_info *)__va(__pa(xen_start_info));
+
+	/* Explanation of the state of page-tables:
+ 	 * At this stage of boot, the __kva addresses are safe to use.
+ 	 * The __va are safe as long as you do _not_ try to access the
+ 	 * pagetables (PTE tables) that have entries for  0-16MB (so 0->_text)
+ 	 * and _end-> upwards. This means that you can still use __va to
+ 	 * access 0-16MB region (and the other) - just that you cannot
+ 	 * modify the PTE entries to do anything. When the init_memory_mapping
+ 	 * is complete however, that can be done - as it installs new
+ 	 * page-tables for the missing regions. */
 }
 #else	/* !CONFIG_X86_64 */
 static RESERVE_BRK_ARRAY(pmd_t, initial_kernel_pmd, PTRS_PER_PMD);
