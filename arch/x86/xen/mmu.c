@@ -2073,6 +2073,8 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 {
 	pud_t *l3;
 	pmd_t *l2;
+	unsigned long kva[2];
+	unsigned i;
 
 	/* max_pfn_mapped is the last pfn mapped in the initial memory
 	 * mappings. Considering that on Xen after the kernel mappings we
@@ -2101,6 +2103,8 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	l3 = m2v(pgd[pgd_index(__START_KERNEL_map)].pgd);
 	l2 = m2v(l3[pud_index(__START_KERNEL_map)].pud);
 
+	kva[0] = (unsigned long)l2;
+	kva[1] = (unsigned long)l3;
 	/* Graft it onto L4[272][0]. Note that we creating an aliasing problem:
 	 * Both L4[272][0] and L4[511][511] have entries that point to the same
 	 * L2 (PMD) tables. Meaning that if you modify it in __va space
@@ -2152,13 +2156,35 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	__xen_write_cr3(true, __pa(init_level4_pgt));
 	xen_mc_issue(PARAVIRT_LAZY_CPU);
 
-	/* Offset by one page since the original pgd is going bye bye */
-	memblock_reserve(__pa(xen_start_info->pt_base + PAGE_SIZE),
-			 (xen_start_info->nr_pt_frames * PAGE_SIZE) - PAGE_SIZE);
-	/* and also RO it so it can actually be used. */
+	/* Offset by one page since the original pgd is going bye bye
+	 * and also RW it so it can be used. */
 	set_page_prot(pgd, PAGE_KERNEL);
-	/* and so that when it gets added to __va pages it won't be marked RO. */
+	/* and for the xen_set_pte_init benefit shift which PFN has to be
+	 * RO-ed for __va pagetables. */
 	pt_base_start += 1;
+
+	/* We can't that easily rip out L3 and L2, as the Xen pagetables are
+	 * set out this way: [L4], [L1], [L2], [L3], [L1], [L1] ...  for
+	 * the initial domain. For guests using the toolstack, they are in:
+	 * [L4], [L3], [L2], [L1], [L1], order .. */
+	for (i = 0; i < ARRAY_SIZE(kva); i++) {
+		unsigned j;
+		pr_debug("kva = %lx, pt_base_start = %lx, pfn of kva = %lx\n",
+			kva[i], pt_base_start, PFN_DOWN(__pa(kva[i])));
+		/* No idea about the order the kva are in, so just do them twice. */
+		for (j = 0; j < ARRAY_SIZE(kva); j++) {
+			if (pt_base_start == PFN_DOWN(__pa(kva[j]))) {
+				set_page_prot((void *)kva[j], PAGE_KERNEL);
+				pt_base_start++;
+			}
+			if (pt_base_end == PFN_DOWN(__pa(kva[j]))) {
+				set_page_prot((void *)kva[j], PAGE_KERNEL);
+				pt_base_end--;
+			}
+		}
+	}
+	/* Our (by three pages) smaller Xen pagetable that we are using */
+	memblock_reserve(PFN_PHYS(pt_base_start), (pt_base_end - pt_base_start) * PAGE_SIZE);
 
 	xen_revector_kva_entries("xen_start_info", (unsigned long)xen_start_info,
 				(unsigned long)xen_start_info + PAGE_SIZE);
