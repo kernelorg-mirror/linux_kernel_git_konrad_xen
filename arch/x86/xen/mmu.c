@@ -1298,8 +1298,16 @@ static void __init xen_pagetable_setup_done(pgd_t *base)
 			zap_region[2].start = (unsigned long)__ka(zap_region[2].pa_start);
 			zap_region[2].end = (unsigned long)__ka(zap_region[2].pa_end);
 
-			/* from here on, can't use the __kva for it */
-			xen_revector_kva_entries("P2M", zap_region[2].start, zap_region[2].end);
+			if (xen_start_info->mfn_list == VMEMMAP_START) {
+				/* The mfn_list is accessed via VMMEMAP_START virtual address. */
+				/* Lets rip it out since we are not using it anymore.. but we might
+ 				 * already have something there. */
+				init_level4_pgt[pgd_index(VMEMMAP_START)] = __pgd(0);
+				/* Rip out pagetables for VMEMMAP_START. But I think they are in usage
+ 				 * already? */
+			} else
+				/* from here on, can't use the __kva for it */
+				xen_revector_kva_entries("P->M", zap_region[2].start, zap_region[2].end);
 
 			memblock_free(__pa(xen_start_info->mfn_list), size);
 			/* so we revector */
@@ -2123,6 +2131,8 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	 * L4[511] -> level3_kernel_pgt */
 	convert_pfn_mfn(init_level4_pgt);
 
+	if (xen_start_info->mfn_list == VMEMMAP_START)
+		init_level4_pgt[pgd_index(VMEMMAP_START)] = pgd[pgd_index(VMEMMAP_START)];
 	/* L3_i[0] -> level2_ident_pgt */
 	convert_pfn_mfn(level3_ident_pgt);
 	/* L3_k[510] -> level2_kernel_pgt

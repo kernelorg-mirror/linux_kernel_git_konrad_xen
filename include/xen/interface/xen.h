@@ -448,6 +448,8 @@ struct start_info {
 	unsigned long mod_start;    /* VIRTUAL address of pre-loaded module.  */
 	unsigned long mod_len;      /* Size (bytes) of pre-loaded module.     */
 	int8_t cmd_line[MAX_GUEST_CMDLINE];
+	unsigned long first_p2m_pfn;/* 1st pfn forming initial P->M table.    */
+	unsigned long nr_p2m_frames;/* # of pfns forming initial P->M table.  */
 };
 
 struct dom0_vga_console_info {

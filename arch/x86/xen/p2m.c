@@ -411,7 +411,7 @@ unsigned long __init xen_revector_p2m_tree(void)
 	va_end = va_start + size;
 
 	/* If we were revectored already, don't do it again. */
-	if (va_start <= __START_KERNEL_map && va_start >= __PAGE_OFFSET)
+	if (va_start <= __START_KERNEL_map && va_start >= __PAGE_OFFSET && va_start != VMEMMAP_START)
 		return 0;
 
 	pr_debug("%s: P2M list is right now in  %llx->%llx (%lx->%lx)\n", __func__, (unsigned long)va_start, (unsigned long)va_end,

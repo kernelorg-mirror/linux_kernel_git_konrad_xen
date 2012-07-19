@@ -1025,7 +1025,10 @@ static void __init xen_reserve_internals(void)
 
 	size = PAGE_ALIGN(xen_start_info->nr_pages * sizeof(unsigned long));
 
-	memblock_reserve(__pa(xen_start_info->mfn_list), size);
+	if (xen_start_info->mfn_list == VMEMMAP_START) {
+		memblock_reserve(PFN_PHYS(xen_start_info->first_p2m_pfn), size);
+	} else
+		memblock_reserve(__pa(xen_start_info->mfn_list), size);
 
 	memblock_reserve(__pa(xen_start_info), PAGE_SIZE);
 
