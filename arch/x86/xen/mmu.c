@@ -1265,9 +1265,10 @@ struct xen_zap_regions {
 	unsigned long pa_start;
 	unsigned long pa_end;
 };
-#define XEN_ZAP_REGION 2
+#define XEN_ZAP_REGION 3
 struct xen_zap_regions zap_region[XEN_ZAP_REGION]__initdata;
 void __init xen_remove_kva_entries(const char *, unsigned long , unsigned long);
+void __init xen_revector_kva_entries(const char *, unsigned long , unsigned long);
 static void *__ka(phys_addr_t);
 #endif
 static void __init xen_pagetable_setup_done(pgd_t *base)
@@ -1277,6 +1278,35 @@ static void __init xen_pagetable_setup_done(pgd_t *base)
 	xen_walk_pmd();
 #endif
 #ifdef CONFIG_X86_64
+	if (!xen_feature(XENFEAT_auto_translated_physmap)) {
+		unsigned long size = PAGE_ALIGN(xen_start_info->nr_pages * sizeof(unsigned long));
+		unsigned long new_mfn_list;
+		unsigned long addr;
+
+		new_mfn_list = xen_revector_p2m_tree();
+		if (new_mfn_list && new_mfn_list != xen_start_info->mfn_list) {
+
+			/* using __kva address */
+			memset((void *)xen_start_info->mfn_list, 0, size);
+			xen_walk_p2m_tree();
+
+			/* MFN list */
+			addr = (unsigned long)__va(__pa(xen_start_info->mfn_list));
+			zap_region[2].pa_start = __pa(addr);
+			zap_region[2].pa_end = zap_region[2].pa_start + size;
+
+			zap_region[2].start = (unsigned long)__ka(zap_region[2].pa_start);
+			zap_region[2].end = (unsigned long)__ka(zap_region[2].pa_end);
+
+			/* from here on, can't use the __kva for it */
+			xen_revector_kva_entries("P2M", zap_region[2].start, zap_region[2].end);
+
+			memblock_free(__pa(xen_start_info->mfn_list), size);
+			/* so we revector */
+			xen_start_info->mfn_list = new_mfn_list;
+			xen_walk_p2m_tree();
+		}
+	}
 	zap_region[0].start = (unsigned long)__ka(zap_region[0].pa_start);
 	zap_region[0].end = (unsigned long)__ka(zap_region[0].pa_end);
 
