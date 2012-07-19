@@ -2152,8 +2152,13 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	__xen_write_cr3(true, __pa(init_level4_pgt));
 	xen_mc_issue(PARAVIRT_LAZY_CPU);
 
-	memblock_reserve(__pa(xen_start_info->pt_base),
-			 (xen_start_info->nr_pt_frames * PAGE_SIZE));
+	/* Offset by one page since the original pgd is going bye bye */
+	memblock_reserve(__pa(xen_start_info->pt_base + PAGE_SIZE),
+			 (xen_start_info->nr_pt_frames * PAGE_SIZE) - PAGE_SIZE);
+	/* and also RO it so it can actually be used. */
+	set_page_prot(pgd, PAGE_KERNEL);
+	/* and so that when it gets added to __va pages it won't be marked RO. */
+	pt_base_start += 1;
 
 	xen_revector_kva_entries("xen_start_info", (unsigned long)xen_start_info,
 				(unsigned long)xen_start_info + PAGE_SIZE);
