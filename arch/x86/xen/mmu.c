@@ -2057,6 +2057,7 @@ static void convert_pfn_mfn(void *v)
 		pte[i] = xen_make_pte(pte[i].pte);
 }
 
+extern pte_t level1_fixmap_pgt[512];
 /*
  * Set up the initial kernel pagetable.
  *
@@ -2114,6 +2115,15 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 
 	memcpy(level2_fixmap_pgt, l2, sizeof(pmd_t) * PTRS_PER_PMD);
 
+	if (l2[pmd_index(fix_to_virt(FIX_BTMAP_BEGIN))].pmd) {
+		pte_t *l1;
+		l1 = m2v(l2[pmd_index(fix_to_virt(FIX_BTMAP_BEGIN))].pmd);
+		memcpy(level1_fixmap_pgt, l1, sizeof(pte_t) * PTRS_PER_PTE);
+	} else
+		memset(level1_fixmap_pgt, 0, PAGE_SIZE);
+	/* Reset one entry */
+	level2_fixmap_pgt[pmd_index(fix_to_virt(FIX_BTMAP_BEGIN))] = __pmd(__pa(level1_fixmap_pgt) | _PAGE_TABLE);
+
 	/* TODO: Describe this in detail. */
 	xen_replace_pagetables(level2_ident_pgt);
 
@@ -2124,6 +2134,7 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	set_page_prot(level3_user_vsyscall, PAGE_KERNEL_RO);
 	set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
 	set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
+	set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
 
 	/* Pin down new L4 */
 	pin_pagetable_pfn(MMUEXT_PIN_L4_TABLE,
