@@ -2158,6 +2158,7 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	xen_revector_kva_entries("xen_start_info", (unsigned long)xen_start_info,
 				(unsigned long)xen_start_info + PAGE_SIZE);
 	xen_start_info = (struct start_info *)__va(__pa(xen_start_info));
+	xen_revector_kva_entries("xen_boot_stack", (unsigned long)xen_boot_stack - PAGE_SIZE, (unsigned long)xen_boot_stack);
 
 	/* Explanation of the state of page-tables:
  	 * At this stage of boot, the __kva addresses are safe to use.

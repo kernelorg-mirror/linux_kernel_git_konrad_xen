@@ -21,6 +21,7 @@ ENTRY(startup_xen)
 	mov $init_thread_union+THREAD_SIZE,%esp
 #else
 	mov %rsi,xen_start_info
+	mov %rsp,xen_boot_stack
 	mov $init_thread_union+THREAD_SIZE,%rsp
 #endif
 	jmp xen_start_kernel

@@ -95,6 +95,8 @@ EXPORT_SYMBOL(machine_to_phys_nr);
 struct start_info *xen_start_info;
 EXPORT_SYMBOL_GPL(xen_start_info);
 
+void *xen_boot_stack;
+
 struct shared_info xen_dummy_shared_info;
 
 void *xen_initial_gdt;
