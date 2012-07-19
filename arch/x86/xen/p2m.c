@@ -393,7 +393,198 @@ void __init xen_build_dynamic_phys_to_machine(void)
 	 * isn't enough pieces to make it work (for one - we are still using the
 	 * Xen provided pagetable. So we do it a bit later (xen_reserve_internals).*/
 }
+#define DEBUG 1
+#ifdef CONFIG_X86_64
+#include <linux/bootmem.h>
+unsigned long __init xen_revector_p2m_tree(void)
+{
+	unsigned long va_start;
+	unsigned long va_end;
+	unsigned long pfn;
+	unsigned long *mfn_list = NULL;
+	unsigned long size;
 
+ 	va_start = xen_start_info->mfn_list;
+	/* We copy in increments of P2M_PER_PAGE * sizeof(unsigned long), so make
+ 	 * sure it is rounded up to that */
+	size = PAGE_ALIGN(xen_start_info->nr_pages * sizeof(unsigned long));
+	va_end = va_start + size;
+
+	/* If we were revectored already, don't do it again. */
+	if (va_start <= __START_KERNEL_map && va_start >= __PAGE_OFFSET)
+		return 0;
+
+	pr_debug("%s: P2M list is right now in  %llx->%llx (%lx->%lx)\n", __func__, (unsigned long)va_start, (unsigned long)va_end,
+			__pa(va_start), __pa(va_end));
+
+	mfn_list = alloc_bootmem_align(size, PAGE_SIZE);
+	if (!mfn_list) {
+		printk(KERN_WARNING "Could not allocate space for a new P2M tree!\n");
+		return xen_start_info->mfn_list;
+	}
+	/* Fill it out with INVALID_P2M_ENTRY value */
+	memset(mfn_list, 0xFF, size);
+
+	for (pfn = 0; pfn < ALIGN(MAX_DOMAIN_PAGES, P2M_PER_PAGE); pfn += P2M_PER_PAGE) {
+		unsigned topidx = p2m_top_index(pfn);
+		unsigned mididx;
+		unsigned long *mid_p;
+
+		if (!p2m_top[topidx])
+			continue;
+
+		if (p2m_top[topidx] == p2m_mid_missing)
+			continue;
+
+		mididx = p2m_mid_index(pfn);
+		mid_p = p2m_top[topidx][mididx];
+		if (!mid_p)
+			continue;
+		if ((mid_p == p2m_missing) || (mid_p == p2m_identity))
+			continue;
+
+		if ((unsigned long)mid_p == INVALID_P2M_ENTRY)
+			continue;
+
+		/* The old va. Rebase it on mfn_list */
+		if (mid_p >= (unsigned long *)va_start && mid_p <= (unsigned long *)va_end) {
+			unsigned long *new;
+
+			new = &mfn_list[pfn];
+
+			memcpy(new, mid_p, PAGE_SIZE);
+#if DEBUG
+			{
+				unsigned i;
+				unsigned last_pfn = min(MAX_DOMAIN_PAGES, xen_start_info->nr_pages);
+				if (unlikely(pfn + P2M_PER_PAGE > last_pfn)) {
+					pr_debug( "%lx is outside the original space (%lx) %lx or %lx -> %lx\n", pfn, last_pfn, new, __pa(new), new + PAGE_SIZE);
+				}
+				for (i = 0; i < P2M_PER_PAGE; i++) {
+					if (new[i] == 0) {
+						pr_debug( "pfn %lx is zero! (old: %lx)\n", pfn + i, p2m_top[topidx][mididx][i]);
+					}
+				}
+			}
+#endif
+			p2m_top[topidx][mididx] = &mfn_list[pfn];
+			p2m_top_mfn_p[topidx][mididx] = virt_to_mfn(&mfn_list[pfn]);
+
+		} else
+		/* This should be the leafs allocated for identity from _brk. */
+			pr_debug("mid_p is %lx (%ld)\n", mid_p, pfn);
+	}
+#if DEBUG
+	/*
+	 * We don't do it to p2m_top, p2m_mid_missing, p2m_missing,
+	 * p2m_mid_missing_mfn, p2m_top_mfn_p, nor p2m_top_mfn b/c
+	 * those are referenced in the code based on indirect registers:
+	 * cmp	0x9034(%rip), %eax [where x9034 would point to
+	 *                          p2m_identity for example]
+	 */
+	for (pfn = 0; pfn < MAX_DOMAIN_PAGES; pfn ++) {
+		unsigned topidx = p2m_top_index(pfn);
+		unsigned mididx;
+		unsigned long *mid_p;
+
+		if (!p2m_top[topidx])
+			continue;
+
+		mididx = p2m_mid_index(pfn);
+		mid_p = p2m_top[topidx][mididx];
+		if (mid_p >= (unsigned long *)va_start && mid_p <= (unsigned long *)va_end)
+			pr_debug("%s: %lx pfn shows %llx!\n", __func__, pfn, mid_p);
+	}
+#endif
+	return (unsigned long)mfn_list;
+
+}
+#else
+static void * __init xen_revector_p2m_tree(void)
+{
+	return NULL;
+}
+#endif
+
+#ifdef DEBUG
+void __init xen_walk_p2m_tree(void)
+{
+	static const char * const level_name[] = { "top", "middle",
+						"entry", "abnormal", "error"};
+#define TYPE_IDENTITY 0
+#define TYPE_MISSING 1
+#define TYPE_PFN 2
+#define TYPE_UNKNOWN 3
+	static const char * const type_name[] = {
+				[TYPE_IDENTITY] = "identity",
+				[TYPE_MISSING] = "missing",
+				[TYPE_PFN] = "pfn",
+				[TYPE_UNKNOWN] = "abnormal"};
+	unsigned long pfn, prev_pfn_type = 0, prev_pfn_level = 0;
+	unsigned int uninitialized_var(prev_level);
+	unsigned int uninitialized_var(prev_type);
+
+	if (!p2m_top)
+		return;
+
+	for (pfn = 0; pfn < MAX_DOMAIN_PAGES; pfn++) {
+		unsigned topidx = p2m_top_index(pfn);
+		unsigned mididx = p2m_mid_index(pfn);
+		unsigned idx = p2m_index(pfn);
+		unsigned lvl, type;
+
+		lvl = 4;
+		type = TYPE_UNKNOWN;
+		if (p2m_top[topidx] == p2m_mid_missing) {
+			lvl = 0; type = TYPE_MISSING;
+		} else if (p2m_top[topidx] == NULL) {
+			lvl = 0; type = TYPE_UNKNOWN;
+		} else if (p2m_top[topidx][mididx] == NULL) {
+			lvl = 1; type = TYPE_UNKNOWN;
+		} else if (p2m_top[topidx][mididx] == p2m_identity) {
+			lvl = 1; type = TYPE_IDENTITY;
+		} else if (p2m_top[topidx][mididx] == p2m_missing) {
+			lvl = 1; type = TYPE_MISSING;
+		} else if (p2m_top[topidx][mididx][idx] == 0) {
+			lvl = 2; type = TYPE_UNKNOWN;
+		} else if (p2m_top[topidx][mididx][idx] == IDENTITY_FRAME(pfn)) {
+			lvl = 2; type = TYPE_IDENTITY;
+		} else if (p2m_top[topidx][mididx][idx] == INVALID_P2M_ENTRY) {
+			lvl = 2; type = TYPE_MISSING;
+		} else if (p2m_top[topidx][mididx][idx] == pfn) {
+			lvl = 2; type = TYPE_PFN;
+		} else if (p2m_top[topidx][mididx][idx] != pfn) {
+			lvl = 2; type = TYPE_PFN;
+		}
+		if (pfn == 0) {
+			prev_level = lvl;
+			prev_type = type;
+		}
+		if (pfn == MAX_DOMAIN_PAGES-1) {
+			lvl = 3;
+			type = TYPE_UNKNOWN;
+		}
+		if (prev_type != type) {
+			printk(KERN_INFO " [0x%lx->0x%lx] %s\n",
+				prev_pfn_type, pfn, type_name[prev_type]);
+			prev_pfn_type = pfn;
+			prev_type = type;
+		}
+		if (prev_level != lvl) {
+			printk(KERN_INFO " [0x%lx->0x%lx] level %s\n",
+				prev_pfn_level, pfn, level_name[prev_level]);
+			prev_pfn_level = pfn;
+			prev_level = lvl;
+		}
+	}
+#undef TYPE_IDENTITY
+#undef TYPE_MISSING
+#undef TYPE_PFN
+#undef TYPE_UNKNOWN
+}
+#else
+void __init xen_walk_p2m_tree(void) { }
+#endif
 unsigned long get_phys_to_machine(unsigned long pfn)
 {
 	unsigned topidx, mididx, idx;
