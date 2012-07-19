@@ -388,6 +388,10 @@ void __init xen_build_dynamic_phys_to_machine(void)
 	}
 
 	m2p_override_init();
+
+	/* NOTE: We cannot call memblock_reserve here for the mfn_list as there
+	 * isn't enough pieces to make it work (for one - we are still using the
+	 * Xen provided pagetable. So we do it a bit later (xen_reserve_internals).*/
 }
 
 unsigned long get_phys_to_machine(unsigned long pfn)
