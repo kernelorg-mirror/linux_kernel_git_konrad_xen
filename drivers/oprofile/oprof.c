@@ -24,8 +24,8 @@
 
 #ifdef CONFIG_XEN
 #include <xen/xen.h>
-#include <xen/xenoprof.h>
 #endif
+#include <xen/xenoprof.h>
 
 struct oprofile_operations oprofile_ops;
 
@@ -275,11 +275,12 @@ int oprofile_set_ulong(unsigned long *addr, unsigned long val)
 
 static int timer_mode;
 
+int (*oprofile_arch_init_func)(struct oprofile_operations * ops);
+void (*oprofile_arch_exit_func)(void);
+
 static int __init oprofile_init(void)
 {
 	int err;
-	int (*oprofile_arch_init_func)(struct oprofile_operations * ops);
-	void (*oprofile_arch_exit_func)(void);
 
 	if (xen_pv_domain()) {
 		oprofile_arch_init_func = xenoprofile_init;
@@ -316,7 +317,7 @@ static void __exit oprofile_exit(void)
 {
 	oprofilefs_unregister();
 	if (!timer_mode)
-		oprofile_arch_exit();
+		oprofile_arch_exit_func();
 }
 
 
