@@ -176,7 +176,7 @@ static const char *xen_swiotlb_error(enum xen_swiotlb_err err)
 	}
 	return "";
 }
-int __ref xen_swiotlb_init(int verbose)
+int __ref xen_swiotlb_init(int verbose, bool early)
 {
 	unsigned long bytes, order;
 	int rc = -ENOMEM;
@@ -190,7 +190,7 @@ retry:
 	/*
 	 * Get IO TLB memory from any location.
 	 */
-	if (!after_bootmem)
+	if (early)
 		xen_io_tlb_start = alloc_bootmem_pages(PAGE_ALIGN(bytes));
 	else {
 #define SLABS_PER_PAGE (1 << (PAGE_SHIFT - IO_TLB_SHIFT))
@@ -220,7 +220,7 @@ retry:
 			       bytes,
 			       xen_io_tlb_nslabs);
 	if (rc) {
-		if (!after_bootmem)
+		if (early)
 			free_bootmem(__pa(xen_io_tlb_start), PAGE_ALIGN(bytes));
 		else {
 			free_pages((unsigned long)xen_io_tlb_start, order);
@@ -230,7 +230,8 @@ retry:
 		goto error;
 	}
 	start_dma_addr = xen_virt_to_bus(xen_io_tlb_start);
-	if (!after_bootmem)
+	rc = 0;
+	if (early)
 		swiotlb_init_with_tbl(xen_io_tlb_start, xen_io_tlb_nslabs, verbose);
 	else
 		rc = swiotlb_late_init_with_tbl(xen_io_tlb_start, xen_io_tlb_nslabs);
@@ -244,7 +245,7 @@ error:
 		goto retry;
 	}
 	pr_err("%s (rc:%d)", xen_swiotlb_error(m_ret), rc);
-	if (!after_bootmem)
+	if (early)
 		panic("%s (rc:%d)", xen_swiotlb_error(m_ret), rc);
 	else
 		free_pages((unsigned long)xen_io_tlb_start, order);
