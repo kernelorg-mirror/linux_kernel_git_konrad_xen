@@ -358,10 +358,21 @@ static enum bp_state increase_reservation(unsigned long nr_pages)
 		BUG_ON(!xen_feature(XENFEAT_auto_translated_physmap) &&
 		       phys_to_machine_mapping_valid(pfn));
 
-		set_phys_to_machine(pfn, frame_list[i]);
+		if (xen_pv_domain() && 
+		    xen_feature(XENFEAT_auto_translated_physmap)) {
+			/* PVH: we just need to update native page table */
+			pte_t *ptep;
+			unsigned int level;
+			void *addr = __va(pfn << PAGE_SHIFT);
+			ptep = lookup_address((unsigned long)addr, &level);
+			set_pte(ptep, pfn_pte(pfn, PAGE_KERNEL));
+		} else
+			set_phys_to_machine(pfn, frame_list[i]);
 
 		/* Link back into the page tables if not highmem. */
-		if (xen_pv_domain() && !PageHighMem(page)) {
+		if (xen_pv_domain() && !PageHighMem(page) && 
+		    !xen_feature(XENFEAT_auto_translated_physmap)) {
+
 			int ret;
 			ret = HYPERVISOR_update_va_mapping(
 				(unsigned long)__va(pfn << PAGE_SHIFT),
@@ -418,12 +429,21 @@ static enum bp_state decrease_reservation(unsigned long nr_pages, gfp_t gfp)
 		scrub_page(page);
 
 		if (xen_pv_domain() && !PageHighMem(page)) {
-			ret = HYPERVISOR_update_va_mapping(
-				(unsigned long)__va(pfn << PAGE_SHIFT),
-				__pte_ma(0), 0);
-			BUG_ON(ret);
-		}
+			if (xen_feature(XENFEAT_auto_translated_physmap)) {
+				unsigned int level;
+				pte_t *ptep;
+				void *addr = __va(pfn << PAGE_SHIFT);
+				ptep = lookup_address((unsigned long)addr, 
+							&level);
+				set_pte(ptep, __pte(0));
 
+			} else {
+				ret = HYPERVISOR_update_va_mapping(
+					(unsigned long)__va(pfn << PAGE_SHIFT),
+					__pte_ma(0), 0);
+				BUG_ON(ret);
+			}
+		}
 	}
 
 	/* Ensure that ballooned highmem pages don't have kmaps. */
@@ -433,6 +453,7 @@ static enum bp_state decrease_reservation(unsigned long nr_pages, gfp_t gfp)
 	/* No more mappings: invalidate P2M and add to balloon. */
 	for (i = 0; i < nr_pages; i++) {
 		pfn = mfn_to_pfn(frame_list[i]);
+		/* PVH note: following will noop for auto translated */
 		__set_phys_to_machine(pfn, INVALID_P2M_ENTRY);
 		balloon_append(pfn_to_page(pfn));
 	}
