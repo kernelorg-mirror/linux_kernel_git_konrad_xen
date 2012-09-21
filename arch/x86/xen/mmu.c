@@ -73,6 +73,7 @@
 #include <xen/interface/version.h>
 #include <xen/interface/memory.h>
 #include <xen/hvc-console.h>
+#include <xen/balloon.h>
 
 #include "multicalls.h"
 #include "mmu.h"
@@ -329,6 +330,26 @@ static void xen_set_pte(pte_t *ptep, pte_t pteval)
 {
 	trace_xen_mmu_set_pte(ptep, pteval);
 	__xen_set_pte(ptep, pteval);
+}
+
+void xen_set_clr_mmio_pvh_pte(unsigned long pfn, unsigned long mfn, 
+			      int nr_mfns, int add_mapping)
+{
+	struct physdev_map_iomem iomem;
+
+	iomem.first_gfn = pfn;
+	iomem.first_mfn = mfn;
+	iomem.nr_mfns = nr_mfns;
+	iomem.add_mapping = add_mapping;
+
+	if (HYPERVISOR_physdev_op(PHYSDEVOP_pvh_map_iomem, &iomem))
+		BUG();
+}
+
+static void xen_dom0pvh_set_pte_at(struct mm_struct *mm, unsigned long addr,
+				   pte_t *ptep, pte_t pteval)
+{
+	native_set_pte(ptep, pteval);
 }
 
 static void xen_set_pte_at(struct mm_struct *mm, unsigned long addr,
@@ -1220,6 +1241,8 @@ static void __init xen_pagetable_init(void)
 #endif
 	paging_init();
 	xen_setup_shared_info();
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
 #ifdef CONFIG_X86_64
 	if (!xen_feature(XENFEAT_auto_translated_physmap)) {
 		unsigned long new_mfn_list;
@@ -1527,6 +1550,10 @@ static void __init xen_set_pte_init(pte_t *ptep, pte_t pte)
 static void pin_pagetable_pfn(unsigned cmd, unsigned long pfn)
 {
 	struct mmuext_op op;
+
+	if (xen_feature(XENFEAT_writable_page_tables))
+		return;
+
 	op.cmd = cmd;
 	op.arg1.mfn = pfn_to_mfn(pfn);
 	if (HYPERVISOR_mmuext_op(&op, 1, NULL, DOMID_SELF))
@@ -1724,6 +1751,10 @@ static void set_page_prot(void *addr, pgprot_t prot)
 	unsigned long pfn = __pa(addr) >> PAGE_SHIFT;
 	pte_t pte = pfn_pte(pfn, prot);
 
+	/* recall for PVH, page tables are native. */
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
 	if (HYPERVISOR_update_va_mapping((unsigned long)addr, pte, 0))
 		BUG();
 }
@@ -1801,6 +1832,9 @@ static void convert_pfn_mfn(void *v)
 	pte_t *pte = v;
 	int i;
 
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
 	/* All levels are converted the same way, so just treat them
 	   as ptes. */
 	for (i = 0; i < PTRS_PER_PTE; i++)
@@ -1830,6 +1864,7 @@ static void __init check_pt_base(unsigned long *pt_base, unsigned long *pt_end,
  * but that's enough to get __va working.  We need to fill in the rest
  * of the physical mapping once some sort of allocator has been set
  * up.
+ * NOTE: for PVH, the page tables are native.
  */
 void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 {
@@ -1907,10 +1942,13 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	 * structure to attach it to, so make sure we just set kernel
 	 * pgd.
 	 */
-	xen_mc_batch();
-	__xen_write_cr3(true, __pa(init_level4_pgt));
-	xen_mc_issue(PARAVIRT_LAZY_CPU);
-
+	if (xen_feature(XENFEAT_writable_page_tables)) {
+		native_write_cr3(__pa(pgd));
+	} else {
+		xen_mc_batch();
+		__xen_write_cr3(true, __pa(init_level4_pgt));
+		xen_mc_issue(PARAVIRT_LAZY_CPU);
+	}
 	/* We can't that easily rip out L3 and L2, as the Xen pagetables are
 	 * set out this way: [L4], [L1], [L2], [L3], [L1], [L1] ...  for
 	 * the initial domain. For guests using the toolstack, they are in:
@@ -2179,6 +2217,17 @@ void __init xen_init_mmu_ops(void)
 {
 	x86_init.mapping.pagetable_reserve = xen_mapping_pagetable_reserve;
 	x86_init.paging.pagetable_init = xen_pagetable_init;
+
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
+		pv_mmu_ops.flush_tlb_others = xen_flush_tlb_others;
+
+		/* set_pte* for PCI devices to map iomem. */
+		if (xen_initial_domain()) {
+			pv_mmu_ops.set_pte = native_set_pte;
+			pv_mmu_ops.set_pte_at = xen_dom0pvh_set_pte_at;
+		}
+		return;
+	}
 	pv_mmu_ops = xen_mmu_ops;
 
 	memset(dummy_mapping, 0xff, PAGE_SIZE);
@@ -2414,6 +2463,92 @@ void __init xen_hvm_init_mmu_ops(void)
 }
 #endif
 
+/* Map foreign gmfn, fgmfn, to local pfn, lpfn. This for the user space 
+ * creating new guest on PVH dom0 and needs to map domU pages. 
+ */
+static int pvh_add_to_xen_p2m(unsigned long lpfn, unsigned long fgmfn,
+			      unsigned int domid)
+{
+	int rc;
+	struct xen_add_to_physmap xatp = { .u.foreign_domid = domid };
+
+	xatp.gpfn = lpfn;
+	xatp.idx = fgmfn;
+	xatp.domid = DOMID_SELF;
+	xatp.space = XENMAPSPACE_gmfn_foreign;
+	rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap, &xatp);
+	if (rc)
+		pr_warn("d0: Failed to map pfn to mfn rc:%d pfn:%lx mfn:%lx\n", 
+			rc, lpfn, fgmfn); 
+	return rc;
+}
+
+int pvh_rem_xen_p2m(unsigned long spfn, int count)
+{
+	struct xen_remove_from_physmap xrp;
+	int i, rc;
+
+	for (i=0; i < count; i++) {
+		xrp.domid = DOMID_SELF;
+		xrp.gpfn = spfn+i;
+		rc = HYPERVISOR_memory_op(XENMEM_remove_from_physmap, &xrp);
+		if (rc) {
+			pr_warn("Failed to unmap pfn:%lx rc:%d done:%d\n",
+				spfn+i, rc, i);
+			return 1;
+		}
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pvh_rem_xen_p2m);
+
+struct pvh_remap_data {
+	unsigned long fgmfn;		/* foreign domain's gmfn */
+	pgprot_t prot;
+	domid_t  domid;
+	struct xen_pvh_pfn_info *pvhinfop;
+};
+
+static int pvh_map_pte_fn(pte_t *ptep, pgtable_t token, unsigned long addr, 
+			void *data)
+{
+	int rc;
+	struct pvh_remap_data *remapp = data;
+	struct xen_pvh_pfn_info *pvhp = remapp->pvhinfop;
+	unsigned long pfn = page_to_pfn(pvhp->pi_paga[pvhp->pi_next_todo++]);
+	pte_t pteval = pte_mkspecial(pfn_pte(pfn, remapp->prot));
+
+	if ((rc=pvh_add_to_xen_p2m(pfn, remapp->fgmfn, remapp->domid)))
+		return rc;
+	native_set_pte(ptep, pteval);
+
+	return 0;
+}
+
+/* The only caller at moment passes one gmfn at a time.
+ * PVH TBD/FIXME: expand this in future to honor batch requests.
+ */
+static int pvh_remap_gmfn_range(struct vm_area_struct *vma,
+				unsigned long addr, unsigned long mfn, int nr,
+				pgprot_t prot, unsigned domid,
+				struct xen_pvh_pfn_info *pvhp)
+{
+	int err;
+	struct pvh_remap_data pvhdata;
+
+	if (nr > 1)
+		return -EINVAL;
+
+	pvhdata.fgmfn = mfn;
+	pvhdata.prot = prot;
+	pvhdata.domid = domid;
+	pvhdata.pvhinfop = pvhp;
+	err = apply_to_page_range(vma->vm_mm, addr, nr << PAGE_SHIFT,
+				  pvh_map_pte_fn, &pvhdata);
+	flush_tlb_all();
+	return err;
+}
+
 #define REMAP_BATCH_SIZE 16
 
 struct remap_data {
@@ -2438,7 +2573,9 @@ static int remap_area_mfn_pte_fn(pte_t *ptep, pgtable_t token,
 int xen_remap_domain_mfn_range(struct vm_area_struct *vma,
 			       unsigned long addr,
 			       unsigned long mfn, int nr,
-			       pgprot_t prot, unsigned domid)
+			       pgprot_t prot, unsigned domid,
+			       struct xen_pvh_pfn_info *pvhp)
+
 {
 	struct remap_data rmd;
 	struct mmu_update mmu_update[REMAP_BATCH_SIZE];
@@ -2453,6 +2590,12 @@ int xen_remap_domain_mfn_range(struct vm_area_struct *vma,
 
 	BUG_ON(!((vma->vm_flags & (VM_PFNMAP | VM_RESERVED | VM_IO)) ==
 				(VM_PFNMAP | VM_RESERVED | VM_IO)));
+
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
+		/* We need to update the local page tables and the xen HAP */
+		return pvh_remap_gmfn_range(vma, addr, mfn, nr, prot, domid,
+					    pvhp);
+	}
 
 	rmd.mfn = mfn;
 	rmd.prot = prot;
@@ -2483,3 +2626,26 @@ out:
 	return err;
 }
 EXPORT_SYMBOL_GPL(xen_remap_domain_mfn_range);
+
+/* Returns: Number of pages unmapped */
+int xen_unmap_domain_mfn_range(struct vm_area_struct *vma,
+			       struct xen_pvh_pfn_info *pvhp)
+{
+	int count = 0;
+
+	if (!pvhp || !xen_feature(XENFEAT_auto_translated_physmap))
+		return 0;
+
+	while (pvhp->pi_next_todo--) {
+		unsigned long pfn;
+
+		/* the mmu has already cleaned up the process mmu resources at
+		 * this point (lookup_address will return NULL). */
+		pfn = page_to_pfn(pvhp->pi_paga[pvhp->pi_next_todo]);
+		pvh_rem_xen_p2m(pfn, 1);
+		count++;
+	}
+	flush_tlb_all();
+	return count;
+}
+EXPORT_SYMBOL_GPL(xen_unmap_domain_mfn_range);
