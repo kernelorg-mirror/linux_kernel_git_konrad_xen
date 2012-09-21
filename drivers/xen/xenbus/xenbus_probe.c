@@ -757,7 +757,11 @@ static int __init xenbus_init(void)
 	case PV:
 		xen_store_evtchn = xen_start_info->store_evtchn;
 		xen_store_mfn = xen_start_info->store_mfn;
-		xen_store_interface = mfn_to_virt(xen_store_mfn);
+		if (xen_feature(XENFEAT_auto_translated_physmap))
+			/* mfn is actually a pfn */
+			xen_store_interface = __va(xen_store_mfn<<PAGE_SHIFT);
+		else
+			xen_store_interface = mfn_to_virt(xen_store_mfn);
 		break;
 	case HVM:
 		err = hvm_get_parameter(HVM_PARAM_STORE_EVTCHN, &v);
