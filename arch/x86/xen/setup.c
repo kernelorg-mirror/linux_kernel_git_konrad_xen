@@ -27,6 +27,7 @@
 #include <xen/interface/memory.h>
 #include <xen/interface/physdev.h>
 #include <xen/features.h>
+#include "mmu.h"
 #include "xen-ops.h"
 #include "vdso.h"
 
@@ -230,6 +231,26 @@ static void __init xen_set_identity_and_release_chunk(
 	*identity += set_phys_range_identity(start_pfn, end_pfn);
 }
 
+/* For PVH, the pfns [0..MAX] are mapped to mfn's in the EPT/NPT. The mfns
+ * are released as part of this 1:1 mapping hypercall back to the dom heap. We
+ * don't use the xen_do_chunk() PV does above because when P2M/EPT/NPT is 
+ * updated, the mfns are already lost as part of the p2m update.
+ * Also, we map the entire IO space, ie, beyond max_pfn_mapped.
+ */
+static void __init xen_pvh_identity_map_chunk(unsigned long start_pfn,
+		unsigned long end_pfn, unsigned long *released, 
+		unsigned long *identity)
+{
+	unsigned long pfn;
+	int numpfns=1, add_mapping=1;
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++)
+		xen_set_clr_mmio_pvh_pte(pfn, pfn, numpfns, add_mapping);
+
+	*released += end_pfn - start_pfn;
+	*identity += end_pfn - start_pfn;
+}
+
 static unsigned long __init xen_set_identity_and_release(
 	const struct e820entry *list, size_t map_size, unsigned long nr_pages)
 {
@@ -238,6 +259,7 @@ static unsigned long __init xen_set_identity_and_release(
 	unsigned long identity = 0;
 	const struct e820entry *entry;
 	int i;
+	int xlated_phys = xen_feature(XENFEAT_auto_translated_physmap);
 
 	/*
 	 * Combine non-RAM regions and gaps until a RAM region (or the
@@ -259,11 +281,16 @@ static unsigned long __init xen_set_identity_and_release(
 			if (entry->type == E820_RAM)
 				end_pfn = PFN_UP(entry->addr);
 
-			if (start_pfn < end_pfn)
-				xen_set_identity_and_release_chunk(
-					start_pfn, end_pfn, nr_pages,
-					&released, &identity);
-
+			if (start_pfn < end_pfn) {
+				if (xlated_phys) {
+					xen_pvh_identity_map_chunk(start_pfn, 
+						end_pfn, &released, &identity);
+				} else {
+					xen_set_identity_and_release_chunk(
+						start_pfn, end_pfn, nr_pages,
+						&released, &identity);
+				}
+			}
 			start = end;
 		}
 	}
@@ -526,10 +553,9 @@ void __cpuinit xen_enable_syscall(void)
 #endif /* CONFIG_X86_64 */
 }
 
-void __init xen_arch_setup(void)
+/* Non auto translated PV domain, ie, it's not PVH. */
+static __init void inline xen_non_pvh_arch_setup(void)
 {
-	xen_panic_handler_init();
-
 	HYPERVISOR_vm_assist(VMASST_CMD_enable, VMASST_TYPE_4gb_segments);
 	HYPERVISOR_vm_assist(VMASST_CMD_enable, VMASST_TYPE_writable_pagetables);
 
@@ -543,6 +569,15 @@ void __init xen_arch_setup(void)
 
 	xen_enable_sysenter();
 	xen_enable_syscall();
+}
+
+/* This function not called for HVM domain */
+void __init xen_arch_setup(void)
+{
+	xen_panic_handler_init();
+
+	if (!xen_feature(XENFEAT_auto_translated_physmap))
+		xen_non_pvh_arch_setup();
 
 #ifdef CONFIG_ACPI
 	if (!(xen_start_info->flags & SIF_INITDOMAIN)) {
