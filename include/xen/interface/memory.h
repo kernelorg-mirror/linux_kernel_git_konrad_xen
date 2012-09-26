@@ -163,9 +163,6 @@ struct xen_add_to_physmap {
     /* Which domain to change the mapping for. */
     domid_t domid;
 
-    /* Number of pages to go through for gmfn_range */
-    uint16_t    size;
-
     union {
         /* Number of pages to go through for gmfn_range */
         uint16_t    size;
