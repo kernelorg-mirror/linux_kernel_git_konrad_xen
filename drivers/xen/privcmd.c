@@ -33,6 +33,7 @@
 #include <xen/features.h>
 #include <xen/page.h>
 #include <xen/xen-ops.h>
+#include <xen/balloon.h>
 
 #include "privcmd.h"
 
@@ -199,6 +200,10 @@ static long privcmd_ioctl_mmap(void __user *udata)
 	if (!xen_initial_domain())
 		return -EPERM;
 
+	/* PVH: TBD/FIXME. For now we only support privcmd_ioctl_mmap_batch */
+	if (xen_pv_domain() && xen_feature(XENFEAT_auto_translated_physmap))
+		return -ENOSYS;
+
 	if (copy_from_user(&mmapcmd, udata, sizeof(mmapcmd)))
 		return -EFAULT;
 
@@ -260,14 +265,18 @@ struct mmap_batch_state {
 	xen_pfn_t __user *user_mfn;
 };
 
+/* PVH dom0 fyi: if domU being created is PV, then mfn is mfn(addr on bus). If
+ * it's PVH then mfn is pfn (input to HAP). */
 static int mmap_batch_fn(void *data, void *state)
 {
 	xen_pfn_t *mfnp = data;
 	struct mmap_batch_state *st = state;
+	struct vm_area_struct *vma = st->vma;
+	struct xen_pvh_pfn_info *pvhp = vma ? vma->vm_private_data : NULL;
 	int ret;
 
 	ret = xen_remap_domain_mfn_range(st->vma, st->va & PAGE_MASK, *mfnp, 1,
-					 st->vma->vm_page_prot, st->domain, NULL);
+					 st->vma->vm_page_prot, st->domain, pvhp);
 
 	/* Store error code for second pass. */
 	*(st->err++) = ret;
@@ -301,6 +310,40 @@ static int mmap_return_errors_v1(void *data, void *state)
 				PRIVCMD_MMAPBATCH_PAGED_ERROR :
 				PRIVCMD_MMAPBATCH_MFN_ERROR;
 	return __put_user(*mfnp, st->user_mfn++);
+}
+
+/* Allocate pfns that are then mapped with gmfns from foreign domid. Update
+ * the vma with the page info to use later.
+ * Returns: 0 if success, otherwise -errno
+ */ 
+static int pvh_privcmd_resv_pfns(struct vm_area_struct *vma, int numpgs)
+{
+	int rc;
+	struct xen_pvh_pfn_info *pvhp;
+
+	pvhp = kzalloc(sizeof(struct xen_pvh_pfn_info), GFP_KERNEL);
+	if (pvhp == NULL)
+		return -ENOMEM;
+
+	pvhp->pi_paga = kcalloc(numpgs, sizeof(pvhp->pi_paga[0]), GFP_KERNEL);
+	if (pvhp->pi_paga == NULL) {
+		kfree(pvhp);
+		return -ENOMEM;
+	}
+
+	rc = alloc_xenballooned_pages(numpgs, pvhp->pi_paga, 0);
+	if (rc != 0) {
+		pr_warn("%s Could not alloc %d pfns rc:%d\n", __FUNCTION__, 
+			numpgs, rc);
+		kfree(pvhp->pi_paga);
+		kfree(pvhp);
+		return -ENOMEM;
+	}
+	pvhp->pi_num_pgs = numpgs;
+	BUG_ON(vma->vm_private_data != (void *)1);
+	vma->vm_private_data = pvhp;
+
+	return 0;
 }
 
 static struct vm_operations_struct privcmd_vm_ops;
@@ -370,6 +413,12 @@ static long privcmd_ioctl_mmap_batch(void __user *udata, int version)
 		up_write(&mm->mmap_sem);
 		goto out;
 	}
+	if (xen_pv_domain() && xen_feature(XENFEAT_auto_translated_physmap)) {
+		if ((ret = pvh_privcmd_resv_pfns(vma, m.num))) {
+			up_write(&mm->mmap_sem);
+			goto out;
+		}
+	}
 
 	state.domain        = m.dom;
 	state.vma           = vma;
@@ -438,6 +487,22 @@ static long privcmd_ioctl(struct file *file,
 	return ret;
 }
 
+static void privcmd_close(struct vm_area_struct *vma)
+{
+	int count;
+	struct xen_pvh_pfn_info *pvhp = vma ? vma->vm_private_data : NULL;
+
+	if (!xen_pv_domain()  || !pvhp ||
+	    !xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
+	count = xen_unmap_domain_mfn_range(vma, pvhp);
+	while (count--)
+		free_xenballooned_pages(1, &pvhp->pi_paga[count]);
+	kfree(pvhp->pi_paga);
+	kfree(pvhp);
+}
+
 static int privcmd_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	printk(KERN_DEBUG "privcmd_fault: vma=%p %lx-%lx, pgoff=%lx, uv=%p\n",
@@ -448,6 +513,7 @@ static int privcmd_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 }
 
 static struct vm_operations_struct privcmd_vm_ops = {
+	.close = privcmd_close,
 	.fault = privcmd_fault
 };
 
