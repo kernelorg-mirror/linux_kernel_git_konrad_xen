@@ -466,6 +466,23 @@ static void free_acpi_perf_data(void)
 				 ->shared_cpu_map);
 	free_percpu(acpi_perf_data);
 }
+static int xen_cpu_soft_notify(struct notifier_block *nfb,
+			       unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (unsigned long)hcpu;
+	struct acpi_processor *_pr = per_cpu(processors, cpu);
+
+	/* The acpi_cpu_soft_notify is called before us so it populates
+	 * the structure for us. */
+	if (action == CPU_ONLINE && _pr)
+		(void)upload_pm_data(_pr);
+	return NOTIFY_OK;
+}
+
+static struct notifier_block xen_cpu_notifier = {
+	.notifier_call = xen_cpu_soft_notify,
+	.priority = -1, /* Be the last one */
+};
 
 static int __init xen_acpi_processor_init(void)
 {
@@ -532,6 +549,8 @@ static int __init xen_acpi_processor_init(void)
 	if (rc)
 		goto err_unregister;
 
+	register_hotcpu_notifier(&xen_cpu_notifier);
+
 	return 0;
 err_unregister:
 	for_each_possible_cpu(i) {
@@ -549,6 +568,7 @@ static void __exit xen_acpi_processor_exit(void)
 {
 	int i;
 
+	unregister_hotcpu_notifier(&xen_cpu_notifier);
 	kfree(acpi_ids_done);
 	for_each_possible_cpu(i) {
 		struct acpi_processor_performance *perf;
