@@ -2520,13 +2520,21 @@ static int xen_hvm_add_p2m(unsigned long lpfn, unsigned long fgmfn,
 			      unsigned int domid)
 {
 	int rc;
-	struct xen_add_to_physmap xatp = { .foreign_domid = domid };
+	struct xen_add_to_physmap_range xatp = {
+		.domid = DOMID_SELF,
+		.foreign_domid = domid,
+		.size = 1,
+		.space = XENMAPSPACE_gmfn_foreign,
+	};
+	xen_ulong_t idx = fgmfn;
+	xen_pfn_t gpfn = lpfn;
+	int err = 0;
 
-	xatp.gpfn = lpfn;
-	xatp.idx = fgmfn;
-	xatp.domid = DOMID_SELF;
-	xatp.space = XENMAPSPACE_gmfn_foreign;
-	rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap, &xatp);
+	set_xen_guest_handle(xatp.idxs, &idx);
+	set_xen_guest_handle(xatp.gpfns, &gpfn);
+	set_xen_guest_handle(xatp.errs, &err);
+
+	rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap_range, &xatp);
 	return rc;
 }
 
