@@ -253,9 +253,14 @@ extern spinlock_t xen_reservation_lock;
 struct xen_remove_from_physmap {
     /* Which domain to change the mapping for. */
     domid_t domid;
-
+   /* To be used in the future if need to. */
+    uint8_t reserved[6];
     /* GPFN of the current mapping of the page. */
     xen_pfn_t gpfn;
+#ifdef CONFIG_X86_32
+    /* No need to do that on ARM as xen_pfn_t is always 8 bytes. */
+    uint8_t __pad[4];
+#endif
 };
 DEFINE_GUEST_HANDLE_STRUCT(xen_remove_from_physmap);
 
