@@ -1044,6 +1044,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 		do {
 			xatp.domid = DOMID_SELF;
 			xatp.idx = i;
+			xatp.foreign_domid = 0;
 			xatp.space = XENMAPSPACE_grant_table;
 			xatp.gpfn = (xen_hvm_resume_frames >> PAGE_SHIFT) + i;
 			rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap, &xatp);

@@ -1509,6 +1509,7 @@ void __ref xen_hvm_init_shared_info(void)
 	xatp.domid = DOMID_SELF;
 	xatp.idx = 0;
 	xatp.space = XENMAPSPACE_shared_info;
+	xatp.foreign_domid = 0;
 	xatp.gpfn = __pa(shared_info_page) >> PAGE_SHIFT;
 	if (HYPERVISOR_memory_op(XENMEM_add_to_physmap, &xatp))
 		BUG();
