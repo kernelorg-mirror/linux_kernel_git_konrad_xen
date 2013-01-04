@@ -2526,9 +2526,11 @@ static int pvh_add_to_xen_p2m(unsigned long lpfn, unsigned long fgmfn,
 	};
 	xen_ulong_t idx = fgmfn;
 	xen_pfn_t gpfn = lpfn;
+	int err = 0;
 
 	set_xen_guest_handle(xatp.idxs, &idx);
 	set_xen_guest_handle(xatp.gpfns, &gpfn);
+	set_xen_guest_handle(xatp.errs, &err);
 
 	rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap_range, &xatp);
 	return rc;
