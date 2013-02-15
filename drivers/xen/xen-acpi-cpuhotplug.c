@@ -113,7 +113,7 @@ static int __cpuinit xen_acpi_processor_add(struct acpi_device *device)
 	return ret;
 }
 
-static int xen_acpi_processor_remove(struct acpi_device *device, int type)
+static int xen_acpi_processor_remove(struct acpi_device *device)
 {
 	struct acpi_processor *pr;
 

@@ -329,7 +329,7 @@ static int xen_acpi_memory_device_add(struct acpi_device *device)
 	return result;
 }
 
-static int xen_acpi_memory_device_remove(struct acpi_device *device, int type)
+static int xen_acpi_memory_device_remove(struct acpi_device *device)
 {
 	struct acpi_memory_device *mem_device = NULL;
 
