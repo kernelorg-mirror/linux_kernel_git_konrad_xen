@@ -188,7 +188,7 @@ acpi_memory_get_device(acpi_handle handle,
 	 * Now add the notified device.  This creates the acpi_device
 	 * and invokes .add function
 	 */
-	result = acpi_bus_add(&device, pdevice, handle, ACPI_BUS_TYPE_DEVICE);
+	result = acpi_bus_scan(handle);
 	if (result) {
 		pr_warn(PREFIX "Cannot add acpi bus\n");
 		return -EINVAL;

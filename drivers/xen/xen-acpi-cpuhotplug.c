@@ -251,7 +251,7 @@ int acpi_processor_device_add(acpi_handle handle, struct acpi_device **device)
 	if (acpi_bus_get_device(phandle, &pdev))
 		return -ENODEV;
 
-	if (acpi_bus_add(device, pdev, handle, ACPI_BUS_TYPE_PROCESSOR))
+	if (acpi_bus_scan(handle))
 		return -ENODEV;
 
 	return 0;
