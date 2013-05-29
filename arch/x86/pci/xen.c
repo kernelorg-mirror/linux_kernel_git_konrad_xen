@@ -263,6 +263,9 @@ error:
 
 #ifdef CONFIG_XEN_DOM0
 static bool __read_mostly pci_seg_supported = true;
+static void *xen_create_phantom_bar(struct pci_dev *dev, int nvec);
+static void *xen_get_phantom_bar(struct pci_dev *dev);
+static void *xen_destroy_phantom_bar(struct pci_dev *dev);
 
 static int xen_initdom_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 {
@@ -272,6 +275,27 @@ static int xen_initdom_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 	if (type == PCI_CAP_ID_MSI && nvec > 1)
 		return 1;
 
+	/*
+	 * Construct a fake BAR - where Linux can write its MSI-X masks as
+	 * it sees fit without altering the PIRQ that we write via the
+	 * hypercalls. We need to save the original fake BAR - otherwise
+	 * the free_msi_irqs is going to choke on iounmap call.
+	 */
+	if (type == PCI_CAP_ID_MSIX && xen_initial_domain()) {
+		void *bar = xen_get_phantom_bar(dev);
+
+		if (!bar) {
+			bar = xen_create_phantom_bar(dev, nvec);
+			WARN(IS_ERR_OR_NULL(bar), "%s phantom bar create %p, err:%d\n",
+			     pci_name(dev), bar, bar ? PTR_RET(bar) : -ENODEV);
+			if (!IS_ERR_OR_NULL(bar)) {
+				list_for_each_entry(msidesc, &dev->msi_list, list) {
+					dev_dbg(&dev->dev, "xen: BAR %p<=%p\n", msidesc->mask_base, bar);
+					msidesc->mask_base = bar;
+				}
+			}
+		}
+	}
 	list_for_each_entry(msidesc, &dev->msi_list, list) {
 		struct physdev_map_pirq map_irq;
 		domid_t domid;
@@ -374,6 +398,21 @@ static void xen_teardown_msi_irqs(struct pci_dev *dev)
 	else
 		xen_pci_frontend_disable_msi(dev);
 
+	dev_dbg(&dev->dev, "xen: %d\n", msidesc->msi_attrib.is_msix);
+	if (msidesc->msi_attrib.is_msix && xen_initial_domain()) {
+		void *bar = xen_destroy_phantom_bar(dev);
+
+		WARN(IS_ERR_OR_NULL(bar), "%s phantom bar teardown %p, err:%d\n",
+		     pci_name(dev), bar, bar ? PTR_RET(bar) : -ENODEV);
+
+		/* Restore the original BAR */
+		if (!IS_ERR_OR_NULL(bar)) {
+			list_for_each_entry(msidesc, &dev->msi_list, list) {
+				dev_dbg(&dev->dev, "xen: BAR %p<=%p\n", msidesc->mask_base, bar);
+				msidesc->mask_base = bar;
+			}
+		}
+	}
 	/* Free the IRQ's and the msidesc using the generic code. */
 	default_teardown_msi_irqs(dev);
 }
@@ -508,6 +547,8 @@ int __init pci_xen_initial_domain(void)
 
 struct xen_device_domain_owner {
 	domid_t domain;
+	void *orig_bar;
+	void *phantom_bar;
 	struct pci_dev *dev;
 	struct list_head list;
 };
@@ -542,23 +583,35 @@ EXPORT_SYMBOL_GPL(xen_find_device_domain_owner);
 
 int xen_register_device_domain_owner(struct pci_dev *dev, uint16_t domain)
 {
-	struct xen_device_domain_owner *owner;
+	struct xen_device_domain_owner *owner, *tmp;
+	int rc = 0;
 
 	owner = kzalloc(sizeof(struct xen_device_domain_owner), GFP_KERNEL);
 	if (!owner)
 		return -ENODEV;
 
 	spin_lock(&dev_domain_list_spinlock);
-	if (find_device(dev)) {
+	tmp = find_device(dev);
+	if (tmp) {
+		/*
+		 * Device might have been previously assigned to initial
+		 * domain and now is being assigned to a guest.
+		 */
+		if (tmp->domain != DOMID_SELF)
+			rc = -EEXIST;
+		else
+			tmp->domain = domain;
 		spin_unlock(&dev_domain_list_spinlock);
 		kfree(owner);
-		return -EEXIST;
+		return rc;
 	}
 	owner->domain = domain;
 	owner->dev = dev;
+	owner->orig_bar = NULL;
+	owner->phantom_bar = NULL;
 	list_add_tail(&owner->list, &dev_domain_list);
 	spin_unlock(&dev_domain_list_spinlock);
-	return 0;
+	return rc;
 }
 EXPORT_SYMBOL_GPL(xen_register_device_domain_owner);
 
@@ -572,10 +625,105 @@ int xen_unregister_device_domain_owner(struct pci_dev *dev)
 		spin_unlock(&dev_domain_list_spinlock);
 		return -ENODEV;
 	}
+	if (owner->orig_bar) {
+		/*
+		 * Initial domain will probably need it. Must not
+		 * remove it from the list.
+		 */
+		owner->domain = DOMID_SELF;
+		spin_unlock(&dev_domain_list_spinlock);
+		return 0;
+	}
 	list_del(&owner->list);
 	spin_unlock(&dev_domain_list_spinlock);
 	kfree(owner);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(xen_unregister_device_domain_owner);
+
+static void *xen_create_phantom_bar(struct pci_dev *dev, int nvec)
+{
+	struct xen_device_domain_owner *owner, *tmp;
+	void *bar = NULL, *new_bar;
+	struct msi_desc *entry;
+
+	entry = list_entry(dev->msi_list.next, struct msi_desc, list);
+	if (!entry->mask_base)
+		return bar;
+	bar = entry->mask_base;
+
+	owner = kzalloc(sizeof(struct xen_device_domain_owner), GFP_KERNEL);
+	if (!owner)
+		return ERR_PTR(-ENOMEM);
+
+	new_bar = kzalloc(nvec * PCI_MSIX_ENTRY_SIZE, GFP_KERNEL);
+	if (!new_bar) {
+		kfree(owner);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	spin_lock(&dev_domain_list_spinlock);
+	tmp = find_device(dev);
+	/*
+	 * Might have been registered early by the xen-pciback in which
+	 * case MSI allocation has not happend yet.
+	 */
+	if (tmp) {
+		WARN_ON(tmp->orig_bar);
+		if (!tmp->orig_bar) {
+			tmp->orig_bar = bar;
+			tmp->phantom_bar = new_bar;
+			spin_unlock(&dev_domain_list_spinlock);
+		} else {
+			spin_unlock(&dev_domain_list_spinlock);
+			kfree(new_bar);
+			new_bar = ERR_PTR(-EEXIST);
+		}
+		kfree(owner);
+		return new_bar;
+	}
+	owner->domain = DOMID_SELF;
+	owner->dev = dev;
+	owner->orig_bar = bar;
+	owner->phantom_bar = new_bar;
+	list_add_tail(&owner->list, &dev_domain_list);
+	spin_unlock(&dev_domain_list_spinlock);
+	return new_bar;
+}
+static void *xen_get_phantom_bar(struct pci_dev *dev)
+{
+	struct xen_device_domain_owner *owner;
+	void *bar = NULL;
+
+	spin_lock(&dev_domain_list_spinlock);
+	owner = find_device(dev);
+	if (owner)
+		bar = owner->phantom_bar;
+
+	spin_unlock(&dev_domain_list_spinlock);
+	return bar;
+};
+static void *xen_destroy_phantom_bar(struct pci_dev *dev)
+{
+	struct xen_device_domain_owner *owner;
+	void *bar = NULL;
+	struct msi_desc *entry;
+
+	spin_lock(&dev_domain_list_spinlock);
+	owner = find_device(dev);
+	WARN_ON(!owner || !owner->orig_bar);
+	if (!owner || !owner->orig_bar)
+		goto out;
+
+	bar = owner->orig_bar;
+	list_for_each_entry(entry, &dev->msi_list, list) {
+		entry->mask_base = bar;
+	}
+	kfree(owner->phantom_bar);
+	owner->phantom_bar = NULL;
+	owner->orig_bar = NULL;
+out:
+	spin_unlock(&dev_domain_list_spinlock);
+	return bar;
+}
 #endif
