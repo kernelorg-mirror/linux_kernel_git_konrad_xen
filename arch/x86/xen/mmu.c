@@ -2534,9 +2534,6 @@ static int pvh_add_to_xen_p2m(unsigned long lpfn, unsigned long fgmfn,
 	set_xen_guest_handle(xatp.errs, &err);
 
 	rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap_range, &xatp);
-	if (rc || err)
-		pr_warn("d0: Failed to map pfn (0x%lx) to mfn (0x%lx) rc:%d:%d\n",
-			lpfn, fgmfn, rc, err);
 	return rc;
 }
 
