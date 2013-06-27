@@ -200,30 +200,20 @@ static void xen_get_wallclock(struct timespec *now)
 
 static int xen_set_wallclock(const struct timespec *now)
 {
-	struct xen_platform_op op;
-
-	/* do nothing for domU */
-	if (!xen_initial_domain())
-		return -1;
-
-	op.cmd = XENPF_settime;
-	op.u.settime.secs = now->tv_sec;
-	op.u.settime.nsecs = now->tv_nsec;
-	op.u.settime.system_time = xen_clocksource_read();
-
-	return HYPERVISOR_dom0_op(&op);
+	return -1;
 }
 
 static int xen_pvclock_gtod_notify(struct notifier_block *nb, unsigned long was_set,
 				   void *priv)
 {
+	static struct timespec next;
 	struct timespec now;
 	struct xen_platform_op op;
 
-	if (!was_set)
-		return NOTIFY_OK;
-
 	now = __current_kernel_time();
+
+	if (!was_set && timespec_compare(&now, &next) < 0)
+		return NOTIFY_OK;
 
 	op.cmd = XENPF_settime;
 	op.u.settime.secs = now.tv_sec;
@@ -231,6 +221,14 @@ static int xen_pvclock_gtod_notify(struct notifier_block *nb, unsigned long was_
 	op.u.settime.system_time = xen_clocksource_read();
 
 	(void)HYPERVISOR_dom0_op(&op);
+
+	/*
+	 * Don't update the wallclock for another 11 minutes. This is
+	 * the same period as the sync_cmos_clock() work.
+	 */
+	next = now;
+	next.tv_sec += 11*60;
+
 	return NOTIFY_OK;
 }
 
@@ -528,7 +526,9 @@ void __init xen_init_time_ops(void)
 
 	x86_platform.calibrate_tsc = xen_tsc_khz;
 	x86_platform.get_wallclock = xen_get_wallclock;
-	x86_platform.set_wallclock = xen_set_wallclock;
+	/* Dom0 uses the native method to set the hardware RTC. */
+	if (!xen_initial_domain())
+		x86_platform.set_wallclock = xen_set_wallclock;
 }
 
 #ifdef CONFIG_XEN_PVHVM
