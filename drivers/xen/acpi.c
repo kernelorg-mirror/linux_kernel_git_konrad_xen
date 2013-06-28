@@ -36,7 +36,8 @@
 #include <asm/xen/hypervisor.h>
 
 int xen_acpi_notify_hypervisor_state(u8 sleep_state,
-				     u32 pm1a_cnt, u32 pm1b_cnt)
+				     u32 pm1a_cnt, u32 pm1b_cnt,
+				     bool extended)
 {
 	struct xen_platform_op op = {
 		.cmd = XENPF_enter_acpi_sleep,
