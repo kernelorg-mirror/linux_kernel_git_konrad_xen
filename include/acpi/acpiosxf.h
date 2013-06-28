@@ -276,4 +276,10 @@ char *acpi_os_get_next_filename(void *dir_handle);
 
 void acpi_os_close_directory(void *dir_handle);
 
+/*
+ * ACPI sleep preparation
+ */
+acpi_status acpi_os_prepare_sleep(u8 sleep_state,
+				  u32 pm1a_control, u32 pm1b_control);
+
 #endif				/* __ACPIOSXF_H__ */
