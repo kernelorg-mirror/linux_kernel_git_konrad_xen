@@ -279,7 +279,7 @@ void acpi_os_close_directory(void *dir_handle);
 /*
  * ACPI sleep preparation
  */
-acpi_status acpi_os_prepare_sleep(u8 sleep_state,
-				  u32 pm1a_control, u32 pm1b_control);
+acpi_status acpi_os_prepare_sleep(u8 sleep_state, u32 val_a, u32 val_b,
+				  u8 extended);
 
 #endif				/* __ACPIOSXF_H__ */
