@@ -7319,6 +7319,14 @@ bool kvm_arch_can_inject_async_page_present(struct kvm_vcpu *vcpu)
 			kvm_x86_ops->interrupt_allowed(vcpu);
 }
 
+void kvm_do_schedule(struct kvm_vcpu *vcpu)
+{
+	/* We try to yield to a kicked vcpu else do a schedule */
+	if (kvm_vcpu_on_spin(vcpu) <= 0)
+		schedule();
+}
+EXPORT_SYMBOL_GPL(kvm_do_schedule);
+
 EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_exit);
 EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_inj_virq);
 EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_page_fault);

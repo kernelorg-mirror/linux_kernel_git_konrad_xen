@@ -1685,7 +1685,7 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
 		if (signal_pending(current))
 			break;
 
-		schedule();
+		kvm_do_schedule(vcpu);
 	}
 
 	finish_wait(&vcpu->wq, &wait);
@@ -1786,7 +1786,7 @@ bool kvm_vcpu_eligible_for_directed_yield(struct kvm_vcpu *vcpu)
 }
 #endif
 
-void kvm_vcpu_on_spin(struct kvm_vcpu *me)
+bool kvm_vcpu_on_spin(struct kvm_vcpu *me)
 {
 	struct kvm *kvm = me->kvm;
 	struct kvm_vcpu *vcpu;
@@ -1835,6 +1835,8 @@ void kvm_vcpu_on_spin(struct kvm_vcpu *me)
 
 	/* Ensure vcpu is not eligible during next spinloop */
 	kvm_vcpu_set_dy_eligible(me, false);
+
+	return yielded;
 }
 EXPORT_SYMBOL_GPL(kvm_vcpu_on_spin);
 

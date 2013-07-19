@@ -226,6 +226,11 @@ static inline int kvm_arch_dev_ioctl_check_extension(long ext)
 	return 0;
 }
 
+static inline void kvm_do_schedule(struct kvm_vcpu *vcpu)
+{
+	schedule();
+}
+
 int kvm_perf_init(void);
 int kvm_perf_teardown(void);
 

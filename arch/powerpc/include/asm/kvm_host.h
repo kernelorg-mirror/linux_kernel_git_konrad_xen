@@ -628,4 +628,9 @@ struct kvm_vcpu_arch {
 #define __KVM_HAVE_ARCH_WQP
 #define __KVM_HAVE_CREATE_DEVICE
 
+static inline void kvm_do_schedule(struct kvm_vcpu *vcpu)
+{
+	schedule();
+}
+
 #endif /* __POWERPC_KVM_HOST_H__ */

@@ -186,6 +186,11 @@ int handle_exit(struct kvm_vcpu *vcpu, struct kvm_run *run,
 int kvm_perf_init(void);
 int kvm_perf_teardown(void);
 
+static inline void kvm_do_schedule(struct kvm_vcpu *vcpu)
+{
+	schedule();
+}
+
 static inline void __cpu_init_hyp_mode(phys_addr_t boot_pgd_ptr,
 				       phys_addr_t pgd_ptr,
 				       unsigned long hyp_stack_ptr,
