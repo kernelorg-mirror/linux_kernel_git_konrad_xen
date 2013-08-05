@@ -1440,6 +1440,8 @@ asmlinkage void __init xen_start_kernel(void)
 	x86_init.oem.arch_setup = xen_arch_setup;
 	x86_init.oem.banner = xen_banner;
 
+	xen_init_spinlocks_pv();
+
 	xen_init_time_ops();
 
 	/*

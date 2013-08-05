@@ -8,7 +8,7 @@
 #include <linux/log2.h>
 #include <linux/gfp.h>
 #include <linux/slab.h>
-
+#include <linux/nmi.h>
 #include <asm/paravirt.h>
 
 #include <xen/interface/xen.h>
@@ -193,9 +193,9 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 * pending, which will cause xen_poll_irq() to return
 	 * immediately.
 	 */
-
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
 	xen_poll_irq(irq);
+
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
 
 	local_irq_save(flags);
@@ -271,6 +271,11 @@ void xen_uninit_lock_cpu(int cpu)
 
 static bool xen_pvspin __initdata = true;
 
+void __init xen_init_spinlocks_pv(void)
+{
+	pv_lock_ops.lock_spinning = PV_CALLEE_SAVE(xen_lock_spinning);
+	pv_lock_ops.unlock_kick = xen_unlock_kick;
+}
 void __init xen_init_spinlocks(void)
 {
 
@@ -281,8 +286,7 @@ void __init xen_init_spinlocks(void)
 
 	static_key_slow_inc(&paravirt_ticketlocks_enabled);
 
-	pv_lock_ops.lock_spinning = PV_CALLEE_SAVE(xen_lock_spinning);
-	pv_lock_ops.unlock_kick = xen_unlock_kick;
+	xen_init_spinlocks_pv();
 }
 
 static __init int xen_parse_nopvspin(char *arg)

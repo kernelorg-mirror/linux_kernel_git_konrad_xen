@@ -73,10 +73,14 @@ static inline void xen_hvm_smp_init(void) {}
 
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
 void __init xen_init_spinlocks(void);
+void __init xen_init_spinlocks_pv(void);
 void xen_init_lock_cpu(int cpu);
 void xen_uninit_lock_cpu(int cpu);
 #else
 static inline void xen_init_spinlocks(void)
+{
+}
+void xen_init_spinlocks_pv(void)
 {
 }
 static inline void xen_init_lock_cpu(int cpu)
