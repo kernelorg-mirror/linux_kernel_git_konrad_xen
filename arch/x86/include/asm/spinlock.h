@@ -42,6 +42,7 @@
 
 extern struct static_key paravirt_ticketlocks_enabled;
 static __always_inline bool static_key_false(struct static_key *key);
+static __always_inline bool static_key_true(struct static_key *key);
 
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
 
@@ -142,7 +143,7 @@ static inline void __ticket_unlock_slowpath(arch_spinlock_t *lock,
 static __always_inline void arch_spin_unlock(arch_spinlock_t *lock)
 {
 	if (TICKET_SLOWPATH_FLAG &&
-	    static_key_false(&paravirt_ticketlocks_enabled)) {
+	    static_key_true(&paravirt_ticketlocks_enabled)) {
 		arch_spinlock_t prev;
 
 		prev = *lock;
