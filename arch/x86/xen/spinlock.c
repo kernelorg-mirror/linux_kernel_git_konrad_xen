@@ -23,6 +23,9 @@ enum xen_contention_stat {
 	TAKEN_SLOW_SPURIOUS,
 	RELEASED_SLOW,
 	RELEASED_SLOW_KICKED,
+	IRQS_DISABLED,
+	EARLY_BOOT,
+	NOT_READY,
 	NR_CONTENTION_STATS
 };
 
@@ -115,9 +118,17 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	unsigned long flags;
 	bool irq_enable = false;
 	/* If kicker interrupts not initialized yet, just spin */
-	if (irq == -1)
+	if (irq == -1) {
+		add_stats(EARLY_BOOT, 1);
 		return;
+	}
+	if (irqs_disabled())
+		add_stats(IRQS_DISABLED, 1);
 
+	if (!cpu_online(cpu)) {
+		add_stats(NOT_READY, 1);
+		return;
+	}
 	start = spin_time_start();
 
 	/*
@@ -185,7 +196,6 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 */
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
 	xen_poll_irq(irq);
-
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
 
 	if (irq_enable)
@@ -322,6 +332,14 @@ static int __init xen_spinlock_debugfs(void)
 			   &spinlock_stats.contention_stats[RELEASED_SLOW]);
 	debugfs_create_u32("released_slow_kicked", 0444, d_spin_debug,
 			   &spinlock_stats.contention_stats[RELEASED_SLOW_KICKED]);
+
+	debugfs_create_u32("early_boot", 0444, d_spin_debug,
+			   &spinlock_stats.contention_stats[EARLY_BOOT]);
+	debugfs_create_u32("irqs_disabled", 0444, d_spin_debug,
+			   &spinlock_stats.contention_stats[IRQS_DISABLED]);
+
+	debugfs_create_u32("not_ready", 0444, d_spin_debug,
+			   &spinlock_stats.contention_stats[NOT_READY]);
 
 	debugfs_create_u64("time_blocked", 0444, d_spin_debug,
 			   &spinlock_stats.time_blocked);
