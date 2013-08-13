@@ -189,6 +189,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	if (irq_enable)
 		raw_local_irq_enable();
 
+	/* Don't re-arrange the irq_enable and xen_poll_irq logic */
+	barrier();
 	/*
 	 * If an interrupt happens here, it will leave the wakeup irq
 	 * pending, which will cause xen_poll_irq() to return
