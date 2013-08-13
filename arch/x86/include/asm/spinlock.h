@@ -38,8 +38,11 @@
 #endif
 
 /* How long a lock should spin before we consider blocking */
+#ifdef CONFIG_XEN_DEBUG_SPIN
+#define SPIN_THRESHOLD	(1 << 4)
+#else
 #define SPIN_THRESHOLD	(1 << 15)
-
+#endif
 extern struct static_key paravirt_ticketlocks_enabled;
 static __always_inline bool static_key_false(struct static_key *key);
 
