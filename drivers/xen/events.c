@@ -1225,6 +1225,7 @@ void xen_send_IPI_one(unsigned int cpu, enum ipi_vector vector)
 #endif
 	irq = per_cpu(ipi_to_irq, cpu)[vector];
 	BUG_ON(irq < 0);
+	BUG_ON(!cpu_online(cpu));
 	notify_remote_via_irq(irq);
 }
 
