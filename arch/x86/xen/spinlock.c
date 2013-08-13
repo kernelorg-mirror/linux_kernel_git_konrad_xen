@@ -309,6 +309,10 @@ early_param("xen_nopvspin", xen_parse_nopvspin);
 #ifdef CONFIG_XEN_DEBUG_FS
 
 static struct dentry *d_spin_debug;
+static struct dentry *d_spin_debug_bm;
+
+extern u64 taken_slow;
+extern u64 released_slow;
 
 static int __init xen_spinlock_debugfs(void)
 {
@@ -346,6 +350,11 @@ static int __init xen_spinlock_debugfs(void)
 
 	debugfs_create_u32_array("histo_blocked", 0444, d_spin_debug,
 				spinlock_stats.histo_spin_blocked, HISTO_BUCKETS + 1);
+
+	d_spin_debug_bm = debugfs_create_dir("bm_spinlocks", d_xen);
+
+	debugfs_create_u64("taken", 0444, d_spin_debug_bm, &taken_slow);
+	debugfs_create_u64("released", 0444, d_spin_debug_bm, &released_slow);
 
 	return 0;
 }
