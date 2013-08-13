@@ -96,23 +96,6 @@ static inline void spin_time_accum_blocked(u64 start)
 }
 #endif  /* CONFIG_XEN_DEBUG_FS */
 
-/*
- * Size struct xen_spinlock so it's the same as arch_spinlock_t.
- */
-#if NR_CPUS < 256
-typedef u8 xen_spinners_t;
-# define inc_spinners(xl) \
-	asm(LOCK_PREFIX " incb %0" : "+m" ((xl)->spinners) : : "memory");
-# define dec_spinners(xl) \
-	asm(LOCK_PREFIX " decb %0" : "+m" ((xl)->spinners) : : "memory");
-#else
-typedef u16 xen_spinners_t;
-# define inc_spinners(xl) \
-	asm(LOCK_PREFIX " incw %0" : "+m" ((xl)->spinners) : : "memory");
-# define dec_spinners(xl) \
-	asm(LOCK_PREFIX " decw %0" : "+m" ((xl)->spinners) : : "memory");
-#endif
-
 struct xen_lock_waiting {
 	struct arch_spinlock *lock;
 	__ticket_t want;
