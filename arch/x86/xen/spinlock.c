@@ -130,7 +130,7 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	int cpu = smp_processor_id();
 	u64 start;
 	unsigned long flags;
-
+	bool irq_enable = false;
 	/* If kicker interrupts not initialized yet, just spin */
 	if (irq == -1)
 		return;
@@ -139,9 +139,14 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 
 	/*
 	 * Make sure an interrupt handler can't upset things in a
-	 * partially setup state.
+	 * partially setup state. Note that if irq_enable that means
+	 * the interrupts are _already_ disabled, but we still need to
+	 * save the flags.
 	 */
 	local_irq_save(flags);
+	if (arch_irqs_disabled_flags(flags))
+		irq_enable = true;
+
 	/*
 	 * We don't really care if we're overwriting some other
 	 * (lock,want) pair, as that would mean that we're currently
@@ -187,6 +192,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 
 	/* Allow interrupts while blocked */
 	local_irq_restore(flags);
+	if (irq_enable)
+		raw_local_irq_enable();
 
 	/*
 	 * If an interrupt happens here, it will leave the wakeup irq
@@ -198,6 +205,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
 
+	if (irq_enable)
+		raw_local_irq_disable();
 	local_irq_save(flags);
 
 	kstat_incr_irqs_this_cpu(irq, irq_to_desc(irq));
