@@ -40,6 +40,7 @@
 #include <xen/hvc-console.h>
 #include <xen/xenbus.h>
 
+#include <asm/xen/hypervisor.h>
 #include "hvc_console.h"
 
 #define HVC_COOKIE   0x58656e /* "Xen" in hex */
@@ -641,7 +642,19 @@ struct console xenboot_console = {
 
 void xen_raw_console_write(const char *str)
 {
-	dom0_write_console(0, str, strlen(str));
+	ssize_t len = strlen(str);
+	int rc = 0;
+
+	if (xen_domain()) {
+		rc = dom0_write_console(0, str, len);
+		if (rc != len && xen_hvm_domain()) /* -ENOSYS */
+			goto outb_print;
+	} else if (xen_cpuid_base()) {
+		int i;
+outb_print:
+		for (i = 0; i < len; i++)
+			outb(str[i], 0xe9);
+	}
 }
 
 void xen_raw_printk(const char *fmt, ...)
