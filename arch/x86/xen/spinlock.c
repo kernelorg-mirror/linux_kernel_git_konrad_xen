@@ -13,6 +13,7 @@
 
 #include <xen/interface/xen.h>
 #include <xen/events.h>
+#include <xen/hvc-console.h>
 
 #include "xen-ops.h"
 #include "debugfs.h"
@@ -247,7 +248,6 @@ static irqreturn_t dummy_handler(int irq, void *dev_id)
 	BUG();
 	return IRQ_HANDLED;
 }
-
 void xen_init_lock_cpu(int cpu)
 {
 	int irq;
@@ -270,7 +270,8 @@ void xen_init_lock_cpu(int cpu)
 		per_cpu(irq_name, cpu) = name;
 	}
 
-	printk("cpu %d spinlock event irq %d\n", cpu, irq);
+	printk("cpu %d spinlock event irq %d, port: %d\n", cpu, irq, evtchn_from_irq(irq));
+	xen_raw_printk("cpu %d spinlock event irq %d, port: %d\n", cpu, irq, evtchn_from_irq(irq));
 }
 
 void xen_uninit_lock_cpu(int cpu)
