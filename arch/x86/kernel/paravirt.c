@@ -144,6 +144,9 @@ unsigned paravirt_patch_default(u8 type, u16 clobbers, void *insnbuf,
 	void *opfunc = get_call_destination(type);
 	unsigned ret;
 
+	if (type == PARAVIRT_PATCH(pv_lock_ops.unlock_kick))
+		printk_ratelimited(KERN_INFO "%lx (%d)\n", addr, len);
+
 	if (opfunc == NULL)
 		/* If there's no function, patch it with a ud2a (BUG) */
 		ret = paravirt_patch_insns(insnbuf, len, ud2a, ud2a+sizeof(ud2a));
