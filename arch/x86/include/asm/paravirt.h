@@ -713,9 +713,9 @@ static inline void __set_fixmap(unsigned /* enum fixed_addresses */ idx,
 #if defined(CONFIG_SMP) && defined(CONFIG_PARAVIRT_SPINLOCKS)
 
 static __always_inline void __ticket_lock_spinning(struct arch_spinlock *lock,
-							__ticket_t ticket)
+							__ticket_t ticket, bool irq_enable)
 {
-	PVOP_VCALLEE2(pv_lock_ops.lock_spinning, lock, ticket);
+	PVOP_VCALLEE3(pv_lock_ops.lock_spinning, lock, ticket, irq_enable);
 }
 
 static __always_inline void __ticket_unlock_kick(struct arch_spinlock *lock,

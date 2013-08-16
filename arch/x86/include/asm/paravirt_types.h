@@ -634,6 +634,10 @@ int paravirt_disable_iospace(void);
 	__PVOP_VCALLEESAVE(op, "", "", PVOP_CALL_ARG1(arg1),		\
 			   PVOP_CALL_ARG2(arg2))
 
+#define PVOP_VCALLEE3(op, arg1, arg2, arg3)				\
+	__PVOP_VCALLEESAVE(op, "", "", PVOP_CALL_ARG1(arg1),		\
+			   PVOP_CALL_ARG2(arg2), PVOP_CALL_ARG3(arg3))
+
 
 #define PVOP_CALL3(rettype, op, arg1, arg2, arg3)			\
 	__PVOP_CALL(rettype, op, "", "", PVOP_CALL_ARG1(arg1),		\

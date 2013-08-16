@@ -112,14 +112,14 @@ static cpumask_t waiting_cpus;
 
 static bool xen_pvpoll __initdata = true;
 static bool xen_pvyield __initdata = false;
-static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
+static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want, bool irq_enable)
 {
 	int irq = __this_cpu_read(lock_kicker_irq);
 	struct xen_lock_waiting *w = &__get_cpu_var(lock_waiting);
 	int cpu = smp_processor_id();
 	u64 start;
 	unsigned long flags;
-	bool irq_enable = false, kick_prev = false;
+	bool __irq_enable = false, kick_prev = false;
 	/* If kicker interrupts not initialized yet, just spin */
 	if (irq == -1) {
 		add_stats(EARLY_BOOT, 1);
@@ -142,8 +142,9 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 */
 	local_irq_save(flags);
 	if (arch_irqs_disabled_flags(flags))
-		irq_enable = true;
-
+		__irq_enable = true;
+	WARN_ON(irq_enable && !__irq_enable);
+	WARN_ON(!irq_enable && __irq_enable);
 	/*
 	 * We don't really care if we're overwriting some other
 	 * (lock,want) pair, as that would mean that we're currently
@@ -350,6 +351,7 @@ static struct dentry *d_spin_debug_bm;
 
 extern u64 taken_slow;
 extern u64 released_slow;
+extern u64 taken_irq_enable;
 
 static int __init xen_spinlock_debugfs(void)
 {
@@ -396,6 +398,7 @@ bm_only:
 
 	debugfs_create_u64("taken", 0444, d_spin_debug_bm, &taken_slow);
 	debugfs_create_u64("released", 0444, d_spin_debug_bm, &released_slow);
+	debugfs_create_u64("taken_irq_enable", 0444, d_spin_debug_bm, &taken_irq_enable);
 
 	return 0;
 }

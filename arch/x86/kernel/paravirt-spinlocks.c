@@ -9,14 +9,17 @@
 #include <asm/paravirt.h>
 
 u64 taken_slow;
+u64 taken_irq_enable;
 u64 released_slow;
 
 EXPORT_SYMBOL(taken_slow);
 EXPORT_SYMBOL(released_slow);
-
-static void test_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
+EXPORT_SYMBOL(taken_irq_enable);
+static void test_lock_spinning(struct arch_spinlock *lock, __ticket_t want, bool irq_enable)
 {
        taken_slow++;
+	if (irq_enable)
+		taken_irq_enable ++;
 }
 PV_CALLEE_SAVE_REGS_THUNK(test_lock_spinning);
 

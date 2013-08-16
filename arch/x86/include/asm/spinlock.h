@@ -76,7 +76,7 @@ static inline void __ticket_unlock_kick(arch_spinlock_t *lock,
  * in the high part, because a wide xadd increment of the low part would carry
  * up and contaminate the high part.
  */
-static __always_inline void arch_spin_lock(arch_spinlock_t *lock)
+static __always_inline void __arch_spin_lock(arch_spinlock_t *lock, bool irq_enable)
 {
 	register struct __raw_tickets inc = { .tail = TICKET_LOCK_INC };
 
@@ -93,9 +93,13 @@ static __always_inline void arch_spin_lock(arch_spinlock_t *lock)
 				goto out;
 			cpu_relax();
 		} while (--count);
-		__ticket_lock_spinning(lock, inc.tail);
+		__ticket_lock_spinning(lock, inc.tail, irq_enable);
 	}
 out:	barrier();	/* make sure nothing creeps before the lock is taken */
+}
+static __always_inline void arch_spin_lock(arch_spinlock_t *lock)
+{
+	__arch_spin_lock(lock, false);
 }
 
 static __always_inline int arch_spin_trylock(arch_spinlock_t *lock)
@@ -175,7 +179,7 @@ static inline int arch_spin_is_contended(arch_spinlock_t *lock)
 static __always_inline void arch_spin_lock_flags(arch_spinlock_t *lock,
 						  unsigned long flags)
 {
-	arch_spin_lock(lock);
+	__arch_spin_lock(lock, !raw_irqs_disabled_flags(flags));
 }
 
 static inline void arch_spin_unlock_wait(arch_spinlock_t *lock)
