@@ -737,4 +737,12 @@ void __init xen_hvm_smp_init(void)
 	smp_ops.cpu_die = xen_hvm_cpu_die;
 	smp_ops.send_call_func_ipi = xen_smp_send_call_function_ipi;
 	smp_ops.send_call_func_single_ipi = xen_smp_send_call_function_single_ipi;
+
+	/*
+ 	 * The alternative logic (which patches the unlock/lock) runs before
+ 	 * the smp bootup up code is activated. That meant we would never patch
+ 	 * the core of the kernel with proper paravirt interfaces but would patch
+ 	 * modules.
+ 	 */
+	xen_init_spinlocks();
 }
