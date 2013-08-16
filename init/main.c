@@ -654,7 +654,7 @@ static void __init do_ctors(void)
 #endif
 }
 
-bool initcall_debug;
+bool initcall_debug = true;
 core_param(initcall_debug, initcall_debug, bool, 0644);
 
 static int __init_or_module do_one_initcall_debug(initcall_t fn)
