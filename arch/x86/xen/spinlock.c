@@ -109,6 +109,7 @@ static DEFINE_PER_CPU(char *, irq_name);
 static DEFINE_PER_CPU(struct xen_lock_waiting, lock_waiting);
 static cpumask_t waiting_cpus;
 
+static bool xen_pvpoll __initdata = true;
 static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 {
 	int irq = __this_cpu_read(lock_kicker_irq);
@@ -116,7 +117,7 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	int cpu = smp_processor_id();
 	u64 start;
 	unsigned long flags;
-	bool irq_enable = false;
+	bool irq_enable = false, kick_prev = false;
 	/* If kicker interrupts not initialized yet, just spin */
 	if (irq == -1) {
 		add_stats(EARLY_BOOT, 1);
@@ -153,6 +154,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 * may only be set non-NULL if the "want" ticket is correct.
 	 * If we're updating "want", we must first clear "lock".
 	 */
+	if (w->lock)
+		kick_prev = true;
 	w->lock = NULL;
 	smp_wmb();
 	w->want = want;
@@ -181,6 +184,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 */
 	if (ACCESS_ONCE(lock->tickets.head) == want) {
 		add_stats(TAKEN_SLOW_PICKUP, 1);
+		if (kick_prev)
+			xen_set_irq_pending(irq);
 		goto out;
 	}
 
@@ -195,7 +200,12 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 * immediately.
 	 */
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
-	xen_poll_irq(irq);
+	/* HACK */
+	if (xen_pvpoll)
+		xen_poll_irq(irq);
+	else
+		xen_poll_irq_timeout(irq, 1000);
+
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
 
 	if (irq_enable)
@@ -305,6 +315,13 @@ static __init int xen_parse_nopvspin(char *arg)
 	return 0;
 }
 early_param("xen_nopvspin", xen_parse_nopvspin);
+
+static __init int xen_parse_nopvpoll(char *arg)
+{
+	xen_pvpoll = false;
+	return 0;
+}
+early_param("xen_nopvpoll", xen_parse_nopvpoll);
 
 #ifdef CONFIG_XEN_DEBUG_FS
 
