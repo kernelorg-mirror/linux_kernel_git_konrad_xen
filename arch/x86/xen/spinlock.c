@@ -248,10 +248,14 @@ static irqreturn_t dummy_handler(int irq, void *dev_id)
 	BUG();
 	return IRQ_HANDLED;
 }
+static bool xen_pvspin __initdata = true;
 void xen_init_lock_cpu(int cpu)
 {
 	int irq;
 	char *name;
+
+	if (!xen_pvspin)
+		return;
 
 	WARN(per_cpu(lock_kicker_irq, cpu) >= 0, "spinlock on CPU%d exists on IRQ%d!\n",
 	     cpu, per_cpu(lock_kicker_irq, cpu));
@@ -276,13 +280,15 @@ void xen_init_lock_cpu(int cpu)
 
 void xen_uninit_lock_cpu(int cpu)
 {
+	if (!xen_pvspin)
+		return;
+
 	unbind_from_irqhandler(per_cpu(lock_kicker_irq, cpu), NULL);
 	per_cpu(lock_kicker_irq, cpu) = -1;
 	kfree(per_cpu(irq_name, cpu));
 	per_cpu(irq_name, cpu) = NULL;
 }
 
-static bool xen_pvspin __initdata = true;
 
 void __init xen_init_spinlocks_pv(void)
 {
@@ -339,6 +345,9 @@ static int __init xen_spinlock_debugfs(void)
 	if (d_xen == NULL)
 		return -ENOMEM;
 
+	if (!xen_pvspin)
+		goto bm_only;
+
 	d_spin_debug = debugfs_create_dir("spinlocks", d_xen);
 
 	debugfs_create_u8("zero_stats", 0644, d_spin_debug, &zero_stats);
@@ -369,6 +378,7 @@ static int __init xen_spinlock_debugfs(void)
 	debugfs_create_u32_array("histo_blocked", 0444, d_spin_debug,
 				spinlock_stats.histo_spin_blocked, HISTO_BUCKETS + 1);
 
+bm_only:
 	d_spin_debug_bm = debugfs_create_dir("bm_spinlocks", d_xen);
 
 	debugfs_create_u64("taken", 0444, d_spin_debug_bm, &taken_slow);
