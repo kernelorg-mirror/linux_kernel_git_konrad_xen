@@ -143,8 +143,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want, bool 
 	local_irq_save(flags);
 	if (arch_irqs_disabled_flags(flags))
 		__irq_enable = true;
-	WARN_ON(irq_enable && !__irq_enable);
-	WARN_ON(!irq_enable && __irq_enable);
+	WARN(irq_enable && !__irq_enable,"%d && !%d %x\n", irq_enable, __irq_enable, flags);
+	WARN(!irq_enable && __irq_enable, "!%d && %d %x\n", irq_enable, __irq_enable, flags);
 	/*
 	 * We don't really care if we're overwriting some other
 	 * (lock,want) pair, as that would mean that we're currently
