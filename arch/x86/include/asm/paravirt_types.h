@@ -327,13 +327,11 @@ struct pv_mmu_ops {
 };
 
 struct arch_spinlock;
+#include <asm/spinlock_types.h>
+
 struct pv_lock_ops {
-	int (*spin_is_locked)(struct arch_spinlock *lock);
-	int (*spin_is_contended)(struct arch_spinlock *lock);
-	void (*spin_lock)(struct arch_spinlock *lock);
-	void (*spin_lock_flags)(struct arch_spinlock *lock, unsigned long flags);
-	int (*spin_trylock)(struct arch_spinlock *lock);
-	void (*spin_unlock)(struct arch_spinlock *lock);
+	struct paravirt_callee_save lock_spinning;
+	void (*unlock_kick)(struct arch_spinlock *lock, __ticket_t ticket);
 };
 
 /* This contains all the paravirt structures: we get a convenient
@@ -635,6 +633,10 @@ int paravirt_disable_iospace(void);
 #define PVOP_VCALLEE2(op, arg1, arg2)					\
 	__PVOP_VCALLEESAVE(op, "", "", PVOP_CALL_ARG1(arg1),		\
 			   PVOP_CALL_ARG2(arg2))
+
+#define PVOP_VCALLEE3(op, arg1, arg2, arg3)				\
+	__PVOP_VCALLEESAVE(op, "", "", PVOP_CALL_ARG1(arg1),		\
+			   PVOP_CALL_ARG2(arg2), PVOP_CALL_ARG3(arg3))
 
 
 #define PVOP_CALL3(rettype, op, arg1, arg2, arg3)			\
