@@ -220,7 +220,7 @@ PV_CALLEE_SAVE_REGS_THUNK(xen_lock_spinning);
 static void xen_unlock_kick(struct arch_spinlock *lock, __ticket_t next)
 {
 	int cpu;
-
+	int count = 0;
 	add_stats(RELEASED_SLOW, 1);
 
 	for_each_cpu(cpu, &waiting_cpus) {
@@ -231,9 +231,10 @@ static void xen_unlock_kick(struct arch_spinlock *lock, __ticket_t next)
 		    ACCESS_ONCE(w->want) == next) {
 			add_stats(RELEASED_SLOW_KICKED, 1);
 			xen_send_IPI_one(cpu, XEN_SPIN_UNLOCK_VECTOR);
-			break;
+			++count;
 		}
 	}
+	BUG_ON(count > 1);
 }
 
 static irqreturn_t dummy_handler(int irq, void *dev_id)
