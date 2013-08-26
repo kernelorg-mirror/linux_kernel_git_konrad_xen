@@ -304,7 +304,15 @@ void __init xen_init_spinlocks(void)
 		return;
 	}
 
+	printk(KERN_INFO "jump branch logic: %s and %s\n",
+		jump_label_get_branch_default(&paravirt_ticketlocks_enabled) ? "true" : "false",
+		atomic_read(&paravirt_ticketlocks_enabled.enabled) ? "enabled" : "disabled");
+
 	static_key_slow_inc(&paravirt_ticketlocks_enabled);
+
+	printk(KERN_INFO "jump branch logic: %s and %s\n",
+		jump_label_get_branch_default(&paravirt_ticketlocks_enabled) ? "true" : "false",
+		atomic_read(&paravirt_ticketlocks_enabled.enabled) ? "enabled" : "disabled");
 
 	pv_lock_ops.lock_spinning = PV_CALLEE_SAVE(xen_lock_spinning);
 	pv_lock_ops.unlock_kick = xen_unlock_kick;
