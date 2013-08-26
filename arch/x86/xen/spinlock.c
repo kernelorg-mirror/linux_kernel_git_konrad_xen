@@ -110,6 +110,7 @@ static DEFINE_PER_CPU(struct xen_lock_waiting, lock_waiting);
 static cpumask_t waiting_cpus;
 
 static bool xen_pvspin __initdata = true;
+static bool xen_pvpoll __initdata = true;
 static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 {
 	int irq = __this_cpu_read(lock_kicker_irq);
@@ -200,7 +201,12 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	if (xen_hvm_domain())
 		BUG_ON(irqs_disabled());
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
-	xen_poll_irq(irq);
+	/* HACK */
+	if (xen_pvpoll)
+		xen_poll_irq(irq);
+	else
+		xen_poll_irq_timeout(irq, 1000);
+
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
 
 	if (irq_enable)
@@ -305,6 +311,13 @@ static __init int xen_parse_nopvspin(char *arg)
 	return 0;
 }
 early_param("xen_nopvspin", xen_parse_nopvspin);
+
+static __init int xen_parse_nopvpoll(char *arg)
+{
+	xen_pvpoll = false;
+	return 0;
+}
+early_param("xen_nopvpoll", xen_parse_nopvpoll);
 
 #ifdef CONFIG_XEN_DEBUG_FS
 
