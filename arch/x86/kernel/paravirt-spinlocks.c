@@ -32,6 +32,9 @@ struct pv_lock_ops pv_lock_ops = {
 #endif
 };
 EXPORT_SYMBOL(pv_lock_ops);
-
+#ifdef CONFIG_XEN_DEBUG_SPIN
+struct static_key paravirt_ticketlocks_enabled = STATIC_KEY_INIT_TRUE;
+#else
 struct static_key paravirt_ticketlocks_enabled = STATIC_KEY_INIT_FALSE;
+#endif
 EXPORT_SYMBOL(paravirt_ticketlocks_enabled);
