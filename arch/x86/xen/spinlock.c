@@ -201,6 +201,10 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 */
 	if (xen_hvm_domain())
 		BUG_ON(irqs_disabled());
+
+	if (this_cpu_read(xen_vcpu)->evtchn_upcall_mask && xen_hvm_domain())
+		xen_raw_printk("CPU%d poll on %d port, upcall masked\n", smp_processor_id(),
+				evtchn_from_irq(irq));
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
 	/* HACK */
 	if (xen_pvpoll)
@@ -243,6 +247,10 @@ static void xen_unlock_kick(struct arch_spinlock *lock, __ticket_t next)
 		if (ACCESS_ONCE(w->lock) == lock &&
 		    ACCESS_ONCE(w->want) == next) {
 			add_stats(RELEASED_SLOW_KICKED, 1);
+
+			if (per_cpu(xen_vcpu, cpu)->evtchn_upcall_mask && xen_hvm_domain())
+				xen_raw_printk("CPU%d -> CPU%d (but masked!)\n", smp_processor_id(), cpu);
+
 			xen_send_IPI_one(cpu, XEN_SPIN_UNLOCK_VECTOR);
 			++count;
 		}
