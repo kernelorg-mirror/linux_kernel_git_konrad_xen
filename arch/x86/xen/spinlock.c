@@ -118,6 +118,7 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	u64 start;
 	unsigned long flags;
 	bool irq_enable = false;
+
 	/* If kicker interrupts not initialized yet, just spin */
 	if (irq == -1) {
 		add_stats(EARLY_BOOT, 1);
@@ -196,7 +197,8 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	 * pending, which will cause xen_poll_irq() to return
 	 * immediately.
 	 */
-
+	if (xen_hvm_domain())
+		BUG_ON(irqs_disabled());
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
 	xen_poll_irq(irq);
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
