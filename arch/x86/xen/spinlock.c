@@ -12,6 +12,7 @@
 #include <asm/paravirt.h>
 
 #include <xen/interface/xen.h>
+#include <xen/interface/event_channel.h>
 #include <xen/events.h>
 #include <xen/hvc-console.h>
 
@@ -120,6 +121,7 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 	u64 start;
 	unsigned long flags;
 	bool irq_enable = false;
+	struct evtchn_spinlock op;
 
 	/* If kicker interrupts not initialized yet, just spin */
 	if (irq == -1) {
@@ -188,6 +190,11 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 		goto out;
 	}
 
+	op.u.d.vcpu = smp_processor_id();
+	op.u.d.want = (uint16_t)want;
+	op.u.d.lock.lo = (uint32_t)(lock);
+	op.u.d.lock.hi = ((u64)lock >> 32);
+
 	/* Allow interrupts while blocked */
 	if (irq_enable)
 		raw_local_irq_enable();
@@ -207,6 +214,10 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 				evtchn_from_irq(irq));
 	/* Block until irq becomes pending (or perhaps a spurious wakeup) */
 	/* HACK */
+#if (CONFIG_NR_CPUS < (256 / __TICKET_LOCK_INC))
+	BUG(); /* Should alter it to use u8 */
+#endif
+	HYPERVISOR_event_channel_op(EVTCHNOP_spinlock_wait, &op);
 	if (xen_pvpoll)
 		xen_poll_irq(irq);
 	else {
@@ -216,6 +227,7 @@ static void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 			xen_poll_irq_timeout(irq, 1000);
 	}
 
+	HYPERVISOR_event_channel_op(EVTCHNOP_spinlock_waitdone, &op);
 	add_stats(TAKEN_SLOW_SPURIOUS, !xen_test_irq_pending(irq));
 
 	if (irq_enable)
@@ -246,11 +258,17 @@ static void xen_unlock_kick(struct arch_spinlock *lock, __ticket_t next)
 		/* Make sure we read lock before want */
 		if (ACCESS_ONCE(w->lock) == lock &&
 		    ACCESS_ONCE(w->want) == next) {
+			struct evtchn_spinlock op = {
+				.u.d.vcpu = cpu,
+				.u.d.want = (uint16_t)next,
+				.u.d.lock.lo = (uint32_t)lock,
+				.u.d.lock.hi = ((u64)lock >> 32),
+			};
 			add_stats(RELEASED_SLOW_KICKED, 1);
 
 			if (per_cpu(xen_vcpu, cpu)->evtchn_upcall_mask && xen_hvm_domain())
 				xen_raw_printk("CPU%d -> CPU%d (but masked!)\n", smp_processor_id(), cpu);
-
+			HYPERVISOR_event_channel_op(EVTCHNOP_spinlock_kick, &op);
 			xen_send_IPI_one(cpu, XEN_SPIN_UNLOCK_VECTOR);
 			++count;
 		}
@@ -267,6 +285,7 @@ void xen_init_lock_cpu(int cpu)
 {
 	int irq;
 	char *name;
+	struct evtchn_spinlock op;
 
 	if (!xen_pvspin)
 		return;
@@ -290,6 +309,8 @@ void xen_init_lock_cpu(int cpu)
 
 	printk("cpu %d spinlock event irq %d, port: %d\n", cpu, irq, evtchn_from_irq(irq));
 	xen_raw_printk("cpu %d spinlock event irq %d, port: %d\n", cpu, irq, evtchn_from_irq(irq));
+	op.u.port = evtchn_from_irq(irq);
+	HYPERVISOR_event_channel_op(EVTCHNOP_spinlock_set, &op);
 }
 
 void xen_uninit_lock_cpu(int cpu)
