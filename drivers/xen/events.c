@@ -229,7 +229,7 @@ static void xen_irq_info_pirq_init(unsigned irq,
 /*
  * Accessors for packed IRQ information.
  */
-static unsigned int evtchn_from_irq(unsigned irq)
+unsigned int evtchn_from_irq(unsigned irq)
 {
 	if (unlikely(WARN(irq < 0 || irq >= nr_irqs, "Invalid irq %d!\n", irq)))
 		return 0;
@@ -1214,6 +1214,7 @@ void xen_send_IPI_one(unsigned int cpu, enum ipi_vector vector)
 {
 	int irq = per_cpu(ipi_to_irq, cpu)[vector];
 	BUG_ON(irq < 0);
+	BUG_ON(!cpu_online(cpu));
 	notify_remote_via_irq(irq);
 }
 
