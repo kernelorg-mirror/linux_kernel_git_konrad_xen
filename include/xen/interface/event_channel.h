@@ -190,6 +190,24 @@ struct evtchn_reset {
 };
 typedef struct evtchn_reset evtchn_reset_t;
 
+#define EVTCHNOP_spinlock_set        11
+#define EVTCHNOP_spinlock_kick        12
+#define EVTCHNOP_spinlock_wait        13
+#define EVTCHNOP_spinlock_waitdone    14
+
+
+struct evtchn_spinlock {
+    union {
+        evtchn_port_t port; /* ..SET */
+        struct {
+            uint32_t    vcpu;
+	    struct {
+		uint32_t lo, hi;
+	    } lock;
+            uint16_t    want;
+        } d;
+    } u;
+};
 struct evtchn_op {
 	uint32_t cmd; /* EVTCHNOP_* */
 	union {
@@ -203,6 +221,7 @@ struct evtchn_op {
 		struct evtchn_status	       status;
 		struct evtchn_bind_vcpu	       bind_vcpu;
 		struct evtchn_unmask	       unmask;
+		struct evtchn_spinlock		spinlock;
 	} u;
 };
 DEFINE_GUEST_HANDLE_STRUCT(evtchn_op);
