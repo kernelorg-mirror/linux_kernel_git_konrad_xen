@@ -36,8 +36,16 @@ enum shutdown_state {
 	 SHUTDOWN_HALT = 4,
 };
 
-/* Ignore multiple shutdown requests. */
-static enum shutdown_state shutting_down = SHUTDOWN_INVALID;
+/* Ignore multiple shutdown requests. There are two potential race conditions:
+ *  - Multiple XenStore 'shutdown' requests. We don't want to run any off
+ *    the callbacks in parallel.
+ *  - In progress 'poweroff' (initiated inside the guest) and a XenStore
+ *     'shutdown' request. If the poweroff has transitioned 'system_state' to
+ *    SYSTEM_POWER_OFF we do not want to call orderly_poweroff. 'system_state'
+ *    is not SMP safe so we depend on reboot notifiers to set 'shutting_down'
+ *    so that we will ignore XenBus shutdown requests.
+ */
+static atomic_t shutting_down = ATOMIC_INIT(SHUTDOWN_INVALID);
 
 struct suspend_info {
 	int cancelled;
@@ -109,7 +117,7 @@ static void do_suspend(void)
 	int err;
 	struct suspend_info si;
 
-	shutting_down = SHUTDOWN_SUSPEND;
+	atomic_set(&shutting_down, SHUTDOWN_SUSPEND);
 
 #ifdef CONFIG_PREEMPT
 	/* If the kernel is preemptible, we need to freeze all the processes
@@ -173,7 +181,7 @@ out_thaw:
 	thaw_processes();
 out:
 #endif
-	shutting_down = SHUTDOWN_INVALID;
+	atomic_set(&shutting_down, SHUTDOWN_INVALID);
 }
 #endif	/* CONFIG_HIBERNATE_CALLBACKS */
 
@@ -184,7 +192,7 @@ struct shutdown_handler {
 
 static void do_poweroff(void)
 {
-	shutting_down = SHUTDOWN_POWEROFF;
+	atomic_set(&shutting_down, SHUTDOWN_POWEROFF);
 	switch (system_state) {
 	case SYSTEM_BOOTING:
 		orderly_poweroff(true);
@@ -201,7 +209,7 @@ static void do_poweroff(void)
 
 static void do_reboot(void)
 {
-	shutting_down = SHUTDOWN_POWEROFF; /* ? */
+	atomic_set(&shutting_down, SHUTDOWN_POWEROFF); /* ? */
 	ctrl_alt_del();
 }
 
@@ -222,7 +230,7 @@ static void shutdown_handler(struct xenbus_watch *watch,
 	};
 	static struct shutdown_handler *handler;
 
-	if (shutting_down != SHUTDOWN_INVALID)
+	if (atomic_read(&shutting_down) != SHUTDOWN_INVALID)
 		return;
 
  again:
@@ -256,12 +264,29 @@ static void shutdown_handler(struct xenbus_watch *watch,
 		handler->cb();
 	} else {
 		pr_info("Ignoring shutdown request: %s\n", str);
-		shutting_down = SHUTDOWN_INVALID;
+		atomic_set(&shutting_down, SHUTDOWN_INVALID);
 	}
 
 	kfree(str);
 }
+/*
+ * This function is called when the system is being rebooted.
+ */
+static int
+xen_system_reboot(struct notifier_block *nb, unsigned long event, void *unused)
+{
+	switch (event) {
+	case SYS_RESTART:
+	case SYS_HALT:
+	case SYS_POWER_OFF:
+		atomic_set(&shutting_down, SHUTDOWN_POWEROFF);
+		break;
+	default:
+		break;
+	}
 
+	return NOTIFY_DONE;
+}
 #ifdef CONFIG_MAGIC_SYSRQ
 static void sysrq_handler(struct xenbus_watch *watch, const char **vec,
 			  unsigned int len)
@@ -302,6 +327,10 @@ static struct xenbus_watch shutdown_watch = {
 	.callback = shutdown_handler
 };
 
+static struct notifier_block xen_shutdown_notifier = {
+	.notifier_call = xen_system_reboot,
+};
+
 static int setup_shutdown_watcher(void)
 {
 	int err;
@@ -319,7 +348,11 @@ static int setup_shutdown_watcher(void)
 		return err;
 	}
 #endif
-
+	err = register_reboot_notifier(&xen_shutdown_notifier);
+	if (err) {
+		pr_warn("Failed to register shutdown notifier\n");
+		return err;
+	}
 	return 0;
 }
 
