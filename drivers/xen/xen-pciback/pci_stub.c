@@ -47,6 +47,9 @@ struct pcistub_device {
 	struct list_head dev_list;
 	spinlock_t lock;
 
+	struct work_struct reset_work;
+	struct completion reset_done;
+
 	struct pci_dev *dev;
 	struct xen_pcibk_device *pdev;/* non-NULL if struct pci_dev is in use */
 };
@@ -63,6 +66,7 @@ static LIST_HEAD(pcistub_devices);
 static int initialize_devices;
 static LIST_HEAD(seized_devices);
 
+static void pcistub_device_reset(struct work_struct *work);
 static struct pcistub_device *pcistub_device_alloc(struct pci_dev *dev)
 {
 	struct pcistub_device *psdev;
@@ -81,6 +85,8 @@ static struct pcistub_device *pcistub_device_alloc(struct pci_dev *dev)
 
 	kref_init(&psdev->kref);
 	spin_lock_init(&psdev->lock);
+	init_completion(&psdev->reset_done);
+	INIT_WORK(&psdev->reset_work, pcistub_device_reset);
 
 	return psdev;
 }
@@ -100,6 +106,9 @@ static void pcistub_device_release(struct kref *kref)
 
 	xen_unregister_device_domain_owner(dev);
 
+	/* If there was an FLR in progress, let it finish and join
+	 * it here. */
+	cancel_work_sync(&psdev->reset_work);
 	/* Call the reset function which does not take lock as this
 	 * is called from "unbind" which takes a device_lock mutex.
 	 */
@@ -219,6 +228,9 @@ struct pci_dev *pcistub_get_pci_dev_by_slot(struct xen_pcibk_device *pdev,
 	}
 
 	spin_unlock_irqrestore(&pcistub_devices_lock, flags);
+	if (found_dev)
+		wait_for_completion(&psdev->reset_done);
+
 	return found_dev;
 }
 
@@ -239,25 +251,93 @@ struct pci_dev *pcistub_get_pci_dev(struct xen_pcibk_device *pdev,
 	}
 
 	spin_unlock_irqrestore(&pcistub_devices_lock, flags);
+	if (found_dev)
+		wait_for_completion(&psdev->reset_done);
+
 	return found_dev;
 }
 
 void pcistub_reset_pci_dev(struct pci_dev *dev)
 {
+	int slots = 0, inuse = 0;
+	unsigned long flags;
+	struct pci_dev *pci_dev;
+	struct pcistub_device *psdev;
+
 	/* This is OK - we are running from workqueue context
 	 * and want to inhibit the user from fiddling with 'reset'
 	 */
 
-	dev_dbg(&dev->dev, "resetting (FLR, D3, etc) the device\n");
+	dev_dbg(&dev->dev, "resetting (FLR, D3, bus, slot, etc) the device\n");
 
 	pci_reset_function(dev);
+
+	/* Don't do this on a bridge level. */
+	if (pci_is_root_bus(dev->bus))
+		return;
+
+	/* We expect X amount of slots (this would also find out
+	 * if we do not have all of the slots assigned to us).
+	 */
+	list_for_each_entry(pci_dev, &dev->bus->devices, bus_list)
+		slots++;
+
+	spin_lock_irqsave(&pcistub_devices_lock, flags);
+	/* Iterate over the existing devices to ascertain whether
+	 * all of them are under the bridge and not in use. */
+	list_for_each_entry(psdev, &pcistub_devices, dev_list) {
+		if (!psdev->dev)
+			continue;
+
+		if (pci_domain_nr(psdev->dev->bus) == pci_domain_nr(dev->bus) &&
+		    psdev->dev->bus->number == dev->bus->number &&
+		    PCI_SLOT(psdev->dev->devfn) == PCI_SLOT(dev->devfn)) {
+			slots--;
+			/* Ignore ourselves in case hadn't cleaned up yet */
+			if (psdev->pdev && psdev->dev != dev)
+				inuse++;
+		}
+	}
+	spin_unlock_irqrestore(&pcistub_devices_lock, flags);
+	/* Slots should be zero (all slots under the bridge are
+	 * accounted for), and inuse should be zero (not assigned
+	 * to anybody). */
+	if (!slots && !inuse) {
+		int rc = 0, bus = 0;
+		list_for_each_entry(pci_dev, &dev->bus->devices, bus_list) {
+			dev_dbg(&pci_dev->dev, "resetting the slot device\n");
+			if (!pci_probe_reset_slot(pci_dev->slot))
+				rc = pci_reset_slot(pci_dev->slot);
+			else
+				bus = 1;
+			if (rc)
+				dev_info(&pci_dev->dev, "resetting slot failed with %d\n", rc);
+		}
+		if (bus && !pci_probe_reset_bus(dev->bus)) {
+			dev_dbg(&dev->bus->dev, "resetting the bus device\n");
+			rc = pci_reset_bus(dev->bus);
+			if (rc)
+				dev_info(&dev->bus->dev, "resetting bus failed with %d\n", rc);
+		}
+	}
+
 	pci_restore_state(dev);
 
 	/* This disables the device. */
 	xen_pcibk_reset_device(dev);
 
-	/* And cleanup up our emulated fields. */
-	xen_pcibk_config_reset_dev(dev);
+	xen_pcibk_config_free_dyn_fields(dev);
+}
+
+static void pcistub_device_reset(struct work_struct *work)
+{
+	struct pcistub_device *psdev = container_of(work, typeof(*psdev), reset_work);
+
+	pcistub_reset_pci_dev(psdev->dev);
+
+	/* Wakes up, if paying attention: pcistub_get_pci_dev_by_slot,
+	 * pcistub_get_pci_dev, and pcistub_put_pci_dev */
+	complete(&psdev->reset_done);
 }
 
 void pcistub_put_pci_dev(struct pci_dev *dev)
@@ -285,15 +365,19 @@ void pcistub_put_pci_dev(struct pci_dev *dev)
 	/* Cleanup our device
 	 * (so it's ready for the next domain)
 	 */
-	pcistub_reset_pci_dev(dev);
-
-	xen_pcibk_config_free_dyn_fields(dev);
+	/* And cleanup up our emulated fields. */
+	xen_pcibk_config_reset_dev(dev);
 
 	xen_unregister_device_domain_owner(dev);
 
 	spin_lock_irqsave(&found_psdev->lock, flags);
 	found_psdev->pdev = NULL;
 	spin_unlock_irqrestore(&found_psdev->lock, flags);
+
+	schedule_work(&found_psdev->reset_work);
+
+	/* Wait .. wait */
+	wait_for_completion(&found_psdev->reset_done);
 
 	pcistub_device_put(found_psdev);
 	up_write(&pcistub_sem);
@@ -402,16 +486,13 @@ static int pcistub_init_device(struct pci_dev *dev)
 	if (!dev_data->pci_saved_state)
 		dev_err(&dev->dev, "Could not store PCI conf saved state!\n");
 	else {
-		dev_dbg(&dev->dev, "resetting (FLR, D3, etc) the device\n");
+		dev_dbg(&dev->dev, "resetting (FLR, D4, etc) the device\n");
 		__pci_reset_function_locked(dev);
+
+		/* WE should figure out whether we can reset the bus. But
+		 * it is locked! (dev_bus)*/
 		pci_restore_state(dev);
 	}
-	/* Now disable the device (this also ensures some private device
-	 * data is setup before we export)
-	 */
-	dev_dbg(&dev->dev, "reset device\n");
-	xen_pcibk_reset_device(dev);
-
 	dev->dev_flags |= PCI_DEV_FLAGS_ASSIGNED;
 	return 0;
 
@@ -455,8 +536,13 @@ static int __init pcistub_init_devices_late(void)
 
 		spin_lock_irqsave(&pcistub_devices_lock, flags);
 
-		if (psdev)
+		if (psdev) {
 			list_add_tail(&psdev->dev_list, &pcistub_devices);
+			spin_unlock_irqrestore(&pcistub_devices_lock, flags);
+
+			schedule_work(&psdev->reset_work);
+			spin_lock_irqsave(&pcistub_devices_lock, flags);
+		}
 	}
 
 	initialize_devices = 1;
@@ -497,10 +583,13 @@ static int pcistub_seize(struct pci_dev *dev)
 
 	if (err)
 		pcistub_device_put(psdev);
+	else
+		schedule_work(&psdev->reset_work);
 
 	return err;
 }
 
+/* Called when 'bind' */
 static int pcistub_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	int err = 0;
@@ -528,6 +617,7 @@ out:
 	return err;
 }
 
+/* Called when 'unbind' */
 static void pcistub_remove(struct pci_dev *dev)
 {
 	struct pcistub_device *psdev, *found_psdev = NULL;
