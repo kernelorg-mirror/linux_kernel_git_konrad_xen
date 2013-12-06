@@ -242,6 +242,24 @@ struct pci_dev *pcistub_get_pci_dev(struct xen_pcibk_device *pdev,
 	return found_dev;
 }
 
+void pcistub_reset_pci_dev(struct pci_dev *dev)
+{
+	/* This is OK - we are running from workqueue context
+	 * and want to inhibit the user from fiddling with 'reset'
+	 */
+
+	dev_dbg(&dev->dev, "resetting (FLR, D3, etc) the device\n");
+
+	pci_reset_function(dev);
+	pci_restore_state(dev);
+
+	/* This disables the device. */
+	xen_pcibk_reset_device(dev);
+
+	/* And cleanup up our emulated fields. */
+	xen_pcibk_config_reset_dev(dev);
+}
+
 void pcistub_put_pci_dev(struct pci_dev *dev)
 {
 	struct pcistub_device *psdev, *found_psdev = NULL;
