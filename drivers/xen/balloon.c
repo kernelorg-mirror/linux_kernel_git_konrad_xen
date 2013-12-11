@@ -354,7 +354,9 @@ static enum bp_state increase_reservation(unsigned long nr_pages)
 
 #ifdef CONFIG_XEN_HAVE_PVMMU
 		/* Link back into the page tables if not highmem. */
-		if (xen_pv_domain() && !PageHighMem(page)) {
+		if (xen_pv_domain() && !PageHighMem(page) &&
+		    !xen_feature(XENFEAT_auto_translated_physmap)) {
+
 			int ret;
 			ret = HYPERVISOR_update_va_mapping(
 				(unsigned long)__va(pfn << PAGE_SHIFT),
@@ -411,28 +413,29 @@ static enum bp_state decrease_reservation(unsigned long nr_pages, gfp_t gfp)
 
 		scrub_page(page);
 
-		/*
-		 * Ballooned out frames are effectively replaced with
-		 * a scratch frame.  Ensure direct mappings and the
-		 * p2m are consistent.
-		 */
-		scratch_page = get_balloon_scratch_page();
-#ifdef CONFIG_XEN_HAVE_PVMMU
-		if (xen_pv_domain() && !PageHighMem(page)) {
-			ret = HYPERVISOR_update_va_mapping(
-				(unsigned long)__va(pfn << PAGE_SHIFT),
-				pfn_pte(page_to_pfn(scratch_page),
-					PAGE_KERNEL_RO), 0);
-			BUG_ON(ret);
-		}
-#endif
 		if (!xen_feature(XENFEAT_auto_translated_physmap)) {
 			unsigned long p;
+
+			/*
+			 * Ballooned out frames are effectively replaced with
+			 * a scratch frame.  Ensure direct mappings and the
+			 * p2m are consistent.
+			 */
+			scratch_page = get_balloon_scratch_page();
+#ifdef CONFIG_XEN_HAVE_PVMMU
+			if (xen_pv_domain() && !PageHighMem(page)) {
+				ret = HYPERVISOR_update_va_mapping(
+					(unsigned long)__va(pfn << PAGE_SHIFT),
+					pfn_pte(page_to_pfn(scratch_page),
+					PAGE_KERNEL_RO), 0);
+				BUG_ON(ret);
+			}
+#endif
 			p = page_to_pfn(scratch_page);
 			__set_phys_to_machine(pfn, pfn_to_mfn(p));
-		}
-		put_balloon_scratch_page();
 
+			put_balloon_scratch_page();
+		}
 		balloon_append(pfn_to_page(pfn));
 	}
 
