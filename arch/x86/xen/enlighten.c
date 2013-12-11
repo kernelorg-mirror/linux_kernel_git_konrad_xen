@@ -1137,6 +1137,8 @@ void xen_setup_shared_info(void)
 	/* In UP this is as good a place as any to set up shared info */
 	xen_setup_vcpu_info_placement();
 #endif
+	if (xen_pvh_domain())
+		return;
 
 	xen_setup_mfn_list_list();
 }
@@ -1148,6 +1150,10 @@ void xen_setup_vcpu_info_placement(void)
 
 	for_each_possible_cpu(cpu)
 		xen_vcpu_setup(cpu);
+
+	/* PVH always uses native IRQ ops */
+	if (xen_pvh_domain())
+		return;
 
 	/* xen_vcpu_setup managed to place the vcpu_info within the
 	   percpu area for all cpus, so make use of it */
