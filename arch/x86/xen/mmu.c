@@ -74,6 +74,7 @@
 #include <xen/interface/version.h>
 #include <xen/interface/memory.h>
 #include <xen/hvc-console.h>
+#include <xen/balloon.h>
 
 #include "multicalls.h"
 #include "mmu.h"
@@ -1207,6 +1208,8 @@ static void __init xen_pagetable_init(void)
 #endif
 	paging_init();
 	xen_setup_shared_info();
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
 #ifdef CONFIG_X86_64
 	if (!xen_feature(XENFEAT_auto_translated_physmap)) {
 		unsigned long new_mfn_list;
@@ -1556,6 +1559,10 @@ static void __init xen_set_pte_init(pte_t *ptep, pte_t pte)
 static void pin_pagetable_pfn(unsigned cmd, unsigned long pfn)
 {
 	struct mmuext_op op;
+
+	if (xen_feature(XENFEAT_writable_page_tables))
+		return;
+
 	op.cmd = cmd;
 	op.arg1.mfn = pfn_to_mfn(pfn);
 	if (HYPERVISOR_mmuext_op(&op, 1, NULL, DOMID_SELF))
@@ -1753,6 +1760,10 @@ static void set_page_prot_flags(void *addr, pgprot_t prot, unsigned long flags)
 	unsigned long pfn = __pa(addr) >> PAGE_SHIFT;
 	pte_t pte = pfn_pte(pfn, prot);
 
+	/* recall for PVH, page tables are native. */
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
 	if (HYPERVISOR_update_va_mapping((unsigned long)addr, pte, flags))
 		BUG();
 }
@@ -1834,6 +1845,9 @@ static void convert_pfn_mfn(void *v)
 	pte_t *pte = v;
 	int i;
 
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
 	/* All levels are converted the same way, so just treat them
 	   as ptes. */
 	for (i = 0; i < PTRS_PER_PTE; i++)
@@ -1863,6 +1877,7 @@ static void __init check_pt_base(unsigned long *pt_base, unsigned long *pt_end,
  * but that's enough to get __va working.  We need to fill in the rest
  * of the physical mapping once some sort of allocator has been set
  * up.
+ * NOTE: for PVH, the page tables are native.
  */
 void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 {
@@ -1940,10 +1955,13 @@ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
 	 * structure to attach it to, so make sure we just set kernel
 	 * pgd.
 	 */
-	xen_mc_batch();
-	__xen_write_cr3(true, __pa(init_level4_pgt));
-	xen_mc_issue(PARAVIRT_LAZY_CPU);
-
+	if (xen_feature(XENFEAT_writable_page_tables)) {
+		native_write_cr3(__pa(init_level4_pgt));
+	} else {
+		xen_mc_batch();
+		__xen_write_cr3(true, __pa(init_level4_pgt));
+		xen_mc_issue(PARAVIRT_LAZY_CPU);
+	}
 	/* We can't that easily rip out L3 and L2, as the Xen pagetables are
 	 * set out this way: [L4], [L1], [L2], [L3], [L1], [L1] ...  for
 	 * the initial domain. For guests using the toolstack, they are in:
@@ -2207,6 +2225,15 @@ static const struct pv_mmu_ops xen_mmu_ops __initconst = {
 void __init xen_init_mmu_ops(void)
 {
 	x86_init.paging.pagetable_init = xen_pagetable_init;
+
+	/* Optimization - we can use the HVM one but it has no idea which
+	 * VCPUs are descheduled - which means that it will needlessly IPI
+	 * them. Xen knows so let it do the job.
+	 */
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
+		pv_mmu_ops.flush_tlb_others = xen_flush_tlb_others;
+		return;
+	}
 	pv_mmu_ops = xen_mmu_ops;
 
 	memset(dummy_mapping, 0xff, PAGE_SIZE);
