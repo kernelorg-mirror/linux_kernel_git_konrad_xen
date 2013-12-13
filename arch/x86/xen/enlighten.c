@@ -1418,6 +1418,22 @@ static void __init xen_boot_params_init_edd(void)
  */
 static void __init xen_setup_stackprotector(void)
 {
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
+		unsigned long dummy;
+
+#ifdef CONFIG_X86_64
+		asm volatile ("pushq %0\n"
+			      "leaq 1f(%%rip),%0\n"
+			      "pushq %0\n"
+			      "lretq\n"
+			      "1:\n"
+			      : "=&r" (dummy) : "0" (__KERNEL_CS));
+#else
+		/* PVH: TODO Implement. */
+		BUG();
+#endif
+		return;
+	}
 	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
 	pv_cpu_ops.load_gdt = xen_load_gdt_boot;
 
