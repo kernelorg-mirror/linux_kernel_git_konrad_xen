@@ -73,9 +73,11 @@ static void cpu_bringup(void)
 	touch_softlockup_watchdog();
 	preempt_disable();
 
-	xen_enable_sysenter();
-	xen_enable_syscall();
-
+	/* PVH runs in ring 0 and allows us to do native syscalls. Yay! */
+	if (!xen_feature(XENFEAT_supervisor_mode_kernel)) {
+		xen_enable_sysenter();
+		xen_enable_syscall();
+	}
 	cpu = smp_processor_id();
 	smp_store_cpu_info(cpu);
 	cpu_data(cpu).x86_max_cores = 1;
@@ -97,8 +99,33 @@ static void cpu_bringup(void)
 	wmb();			/* make sure everything is out */
 }
 
-static void cpu_bringup_and_idle(void)
+static void pvh_set_bringup_context(int cpu)
 {
+#ifdef CONFIG_X86_32
+	BUG();
+#else
+	load_percpu_segment(cpu);
+	switch_to_new_gdt(smp_processor_id());
+
+	__asm__ __volatile__ (
+		"movl %0,%%ds\n"
+		"movl %0,%%ss\n"
+		"pushq %%rax\n"
+		"leaq 1f(%%rip),%%rax\n"
+		"pushq %%rax\n"
+		"retfq\n"
+		"1:\n"
+		: : "r" (__KERNEL_DS), "a" (__KERNEL_CS) : "memory");
+#endif
+}
+
+/* Note: cpu parameter is only relevant for PVH */
+static void cpu_bringup_and_idle(int cpu)
+{
+	if (xen_feature(XENFEAT_auto_translated_physmap) &&
+	    xen_feature(XENFEAT_supervisor_mode_kernel))
+		pvh_set_bringup_context(cpu);
+
 	cpu_bringup();
 	cpu_startup_entry(CPUHP_ONLINE);
 }
@@ -274,9 +301,10 @@ static void __init xen_smp_prepare_boot_cpu(void)
 	native_smp_prepare_boot_cpu();
 
 	if (xen_pv_domain()) {
-		/* We've switched to the "real" per-cpu gdt, so make sure the
-		   old memory can be recycled */
-		make_lowmem_page_readwrite(xen_initial_gdt);
+		if (!xen_feature(XENFEAT_writable_page_tables))
+			/* We've switched to the "real" per-cpu gdt, so make sure the
+			 * old memory can be recycled */
+			make_lowmem_page_readwrite(xen_initial_gdt);
 
 #ifdef CONFIG_X86_32
 		/*
@@ -286,7 +314,6 @@ static void __init xen_smp_prepare_boot_cpu(void)
 		loadsegment(ds, __USER_DS);
 		loadsegment(es, __USER_DS);
 #endif
-
 		xen_filter_cpu_maps();
 		xen_setup_vcpu_info_placement();
 	}
@@ -360,22 +387,21 @@ cpu_initialize_context(unsigned int cpu, struct task_struct *idle)
 
 	gdt = get_cpu_gdt_table(cpu);
 
-	ctxt->flags = VGCF_IN_KERNEL;
-	ctxt->user_regs.ss = __KERNEL_DS;
 #ifdef CONFIG_X86_32
+	/* Note: PVH is not yet supported on x86_32. */
 	ctxt->user_regs.fs = __KERNEL_PERCPU;
 	ctxt->user_regs.gs = __KERNEL_STACK_CANARY;
-#else
-	ctxt->gs_base_kernel = per_cpu_offset(cpu);
 #endif
 	ctxt->user_regs.eip = (unsigned long)cpu_bringup_and_idle;
 
 	memset(&ctxt->fpu_ctxt, 0, sizeof(ctxt->fpu_ctxt));
 
-	{
+	if (!xen_feature(XENFEAT_auto_translated_physmap)) {
+		ctxt->flags = VGCF_IN_KERNEL;
 		ctxt->user_regs.eflags = 0x1000; /* IOPL_RING1 */
 		ctxt->user_regs.ds = __USER_DS;
 		ctxt->user_regs.es = __USER_DS;
+		ctxt->user_regs.ss = __KERNEL_DS;
 
 		xen_copy_trap_info(ctxt->trap_ctxt);
 
@@ -396,18 +422,20 @@ cpu_initialize_context(unsigned int cpu, struct task_struct *idle)
 #ifdef CONFIG_X86_32
 		ctxt->event_callback_cs     = __KERNEL_CS;
 		ctxt->failsafe_callback_cs  = __KERNEL_CS;
+#else
+		ctxt->gs_base_kernel = per_cpu_offset(cpu);
 #endif
 		ctxt->event_callback_eip    =
 					(unsigned long)xen_hypervisor_callback;
 		ctxt->failsafe_callback_eip =
 					(unsigned long)xen_failsafe_callback;
-	}
-	ctxt->user_regs.cs = __KERNEL_CS;
+		ctxt->user_regs.cs = __KERNEL_CS;
+		per_cpu(xen_cr3, cpu) = __pa(swapper_pg_dir);
+	} else
+		ctxt->user_regs.rdi = cpu;
+
 	ctxt->user_regs.esp = idle->thread.sp0 - sizeof(struct pt_regs);
-
-	per_cpu(xen_cr3, cpu) = __pa(swapper_pg_dir);
 	ctxt->ctrlreg[3] = xen_pfn_to_cr3(virt_to_mfn(swapper_pg_dir));
-
 	if (HYPERVISOR_vcpu_op(VCPUOP_initialise, cpu, ctxt))
 		BUG();
 
