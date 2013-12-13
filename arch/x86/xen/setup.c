@@ -27,6 +27,7 @@
 #include <xen/interface/memory.h>
 #include <xen/interface/physdev.h>
 #include <xen/features.h>
+#include "mmu.h"
 #include "xen-ops.h"
 #include "vdso.h"
 
@@ -81,6 +82,9 @@ static void __init xen_add_extra_mem(u64 start, u64 size)
 
 	memblock_reserve(start, size);
 
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return;
+
 	xen_max_p2m_pfn = PFN_DOWN(start + size);
 	for (pfn = PFN_DOWN(start); pfn < xen_max_p2m_pfn; pfn++) {
 		unsigned long mfn = pfn_to_mfn(pfn);
@@ -103,6 +107,7 @@ static unsigned long __init xen_do_chunk(unsigned long start,
 		.domid        = DOMID_SELF
 	};
 	unsigned long len = 0;
+	int xlated_phys = xen_feature(XENFEAT_auto_translated_physmap);
 	unsigned long pfn;
 	int ret;
 
@@ -116,15 +121,25 @@ static unsigned long __init xen_do_chunk(unsigned long start,
 				continue;
 			frame = mfn;
 		} else {
-			if (mfn != INVALID_P2M_ENTRY)
+			if (!xlated_phys && mfn != INVALID_P2M_ENTRY)
 				continue;
 			frame = pfn;
 		}
 		set_xen_guest_handle(reservation.extent_start, &frame);
 		reservation.nr_extents = 1;
 
-		ret = HYPERVISOR_memory_op(release ? XENMEM_decrease_reservation : XENMEM_populate_physmap,
-					   &reservation);
+		if (xlated_phys && release) {
+			struct xen_remove_from_physmap xrp = {
+					.gpfn	     = frame,
+					.domid       = DOMID_SELF
+			};
+			ret = HYPERVISOR_memory_op(XENMEM_remove_from_physmap, &xrp);
+			if (!ret) /* Zero return value is good */
+				ret = 1;
+		} else
+			ret = HYPERVISOR_memory_op(release ? XENMEM_decrease_reservation
+						   : XENMEM_populate_physmap, &reservation);
+
 		WARN(ret != 1, "Failed to %s pfn %lx err=%d\n",
 		     release ? "release" : "populate", pfn, ret);
 
@@ -222,6 +237,9 @@ static void __init xen_set_identity_and_release_chunk(
 	 * (except for the ISA region which must be 1:1 mapped) to
 	 * release the refcounts (in Xen) on the original frames.
 	 */
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		goto skip;
+
 	for (pfn = start_pfn; pfn <= max_pfn_mapped && pfn < end_pfn; pfn++) {
 		pte_t pte = __pte_ma(0);
 
@@ -231,7 +249,7 @@ static void __init xen_set_identity_and_release_chunk(
 		(void)HYPERVISOR_update_va_mapping(
 			(unsigned long)__va(pfn << PAGE_SHIFT), pte, 0);
 	}
-
+skip:
 	if (start_pfn < nr_pages)
 		*released += xen_release_chunk(
 			start_pfn, min(end_pfn, nr_pages));
