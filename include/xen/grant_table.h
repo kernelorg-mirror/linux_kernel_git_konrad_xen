@@ -178,7 +178,7 @@ int arch_gnttab_map_status(uint64_t *frames, unsigned long nr_gframes,
 			   grant_status_t **__shared);
 void arch_gnttab_unmap(void *shared, unsigned long nr_gframes);
 
-extern unsigned long xen_hvm_resume_frames;
+extern unsigned long xen_auto_translated_frames;
 unsigned int gnttab_max_grant_frames(void);
 
 #define gnttab_map_vaddr(map) ((void *)(map.host_virt_addr))

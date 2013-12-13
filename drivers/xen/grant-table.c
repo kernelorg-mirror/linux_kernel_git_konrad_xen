@@ -47,6 +47,7 @@
 #include <xen/interface/xen.h>
 #include <xen/page.h>
 #include <xen/grant_table.h>
+#include <xen/balloon.h>
 #include <xen/interface/memory.h>
 #include <xen/hvc-console.h>
 #include <xen/swiotlb-xen.h>
@@ -66,8 +67,8 @@ static unsigned int boot_max_nr_grant_frames;
 static int gnttab_free_count;
 static grant_ref_t gnttab_free_head;
 static DEFINE_SPINLOCK(gnttab_list_lock);
-unsigned long xen_hvm_resume_frames;
-EXPORT_SYMBOL_GPL(xen_hvm_resume_frames);
+unsigned long xen_auto_translated_frames;
+EXPORT_SYMBOL_GPL(xen_auto_translated_frames);
 
 static union {
 	struct grant_entry_v1 *v1;
@@ -1060,10 +1061,11 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 	unsigned int nr_gframes = end_idx + 1;
 	int rc;
 
-	if (xen_hvm_domain()) {
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
 		struct xen_add_to_physmap xatp;
 		unsigned int i = end_idx;
 		rc = 0;
+
 		/*
 		 * Loop backwards, so that the first hypercall has the largest
 		 * index, ensuring that the table will grow only once.
@@ -1072,7 +1074,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 			xatp.domid = DOMID_SELF;
 			xatp.idx = i;
 			xatp.space = XENMAPSPACE_grant_table;
-			xatp.gpfn = (xen_hvm_resume_frames >> PAGE_SHIFT) + i;
+			xatp.gpfn = (xen_auto_translated_frames >> PAGE_SHIFT) + i;
 			rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap, &xatp);
 			if (rc != 0) {
 				pr_warn("grant table add_to_physmap failed, err=%d\n",
@@ -1169,15 +1171,33 @@ static int gnttab_setup(void)
 	if (max_nr_gframes < nr_grant_frames)
 		return -ENOSYS;
 
+	/* PVH note: xen will free existing kmalloc'd mfn in
+	 * XENMEM_add_to_physmap, so use balloon memory. */
+	if (xen_feature(XENFEAT_auto_translated_physmap) && !xen_auto_translated_frames) {
+		/* xen_auto_translated_frames is setup for PVHVM by
+		 * alloc_xen_mmio. */
+		struct page pages[1];
+		int rc;
+
+		rc = alloc_xenballooned_pages(nr_grant_frames, (struct page **)&pages, false /* lowmem */);
+		if (rc)
+			return rc;
+
+		xen_auto_translated_frames = pfn_to_kaddr(page_to_pfn(&pages[0]));
+		if (!virt_addr_valid(xen_auto_translated_frames)) {
+			pr_warn("Failed to kmalloc pages for pv in hvm grant frames\n");
+			return -ENOMEM;
+		}
+	}
 	if (xen_pv_domain())
 		return gnttab_map(0, nr_grant_frames - 1);
 
 	if (gnttab_shared.addr == NULL) {
-		gnttab_shared.addr = xen_remap(xen_hvm_resume_frames,
+		gnttab_shared.addr = xen_remap(xen_auto_translated_frames,
 						PAGE_SIZE * max_nr_gframes);
 		if (gnttab_shared.addr == NULL) {
 			pr_warn("Failed to ioremap gnttab share frames (addr=0x%08lx)!\n",
-					xen_hvm_resume_frames);
+					xen_auto_translated_frames);
 			return -ENOMEM;
 		}
 	}

@@ -154,7 +154,7 @@ static int platform_pci_init(struct pci_dev *pdev,
 	}
 
 	max_nr_gframes = gnttab_max_grant_frames();
-	xen_hvm_resume_frames = alloc_xen_mmio(PAGE_SIZE * max_nr_gframes);
+	xen_auto_translated_frames = alloc_xen_mmio(PAGE_SIZE * max_nr_gframes);
 	ret = gnttab_init();
 	if (ret)
 		goto out;
