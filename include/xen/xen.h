@@ -29,8 +29,7 @@ extern enum xen_domain_type xen_domain_type;
 #define xen_initial_domain()	(0)
 #endif	/* CONFIG_XEN_DOM0 */
 
-#ifdef CONFIG_XEN_PVHVM
-/* Temporarily under XEN_PVHVM, but will be under CONFIG_XEN_PVH */
+#ifdef CONFIG_XEN_PVH
 #include <xen/features.h>
 #define xen_pvh_domain() (xen_pv_domain() && \
 			  xen_feature(XENFEAT_auto_translated_physmap) && \
