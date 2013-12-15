@@ -53,12 +53,9 @@ config XEN_DEBUG_FS
 
 config XEN_PVH
 	bool "Support for running as a PVH guest"
-	bool "Support for running as a PVH guest (EXPERIMENTAL)"
-	depends on X86_64 && XEN && EXPERIMENTAL && XEN_PVHVM
+	depends on X86_64 && XEN && XEN_PVHVM
 	default n
 	help
 	   This option enables support for running as a PVH guest (PV guest
 	   using hardware extensions) under a suitably capable hypervisor.
-	   This option is EXPERIMENTAL because the hypervisor interfaces
-	   which it uses is not yet considered stable therefore backwards and
-	   forwards compatibility is not yet guaranteed.  If unsure, say N.
+	   If unsure, say N.
