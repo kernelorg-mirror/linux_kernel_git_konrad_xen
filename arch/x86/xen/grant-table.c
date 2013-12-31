@@ -125,7 +125,7 @@ void arch_gnttab_unmap(void *shared, unsigned long nr_gframes)
 	apply_to_page_range(&init_mm, (unsigned long)shared,
 			    PAGE_SIZE * nr_gframes, unmap_pte_fn, NULL);
 }
-#ifdef CONFIG_XEN_PVHVM
+#ifdef CONFIG_XEN_PVH
 #include <xen/balloon.h>
 #include <linux/slab.h>
 static int __init xlated_setup_gnttab_pages(void)
