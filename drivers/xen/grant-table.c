@@ -65,8 +65,8 @@ static unsigned int nr_grant_frames;
 static int gnttab_free_count;
 static grant_ref_t gnttab_free_head;
 static DEFINE_SPINLOCK(gnttab_list_lock);
-unsigned long xen_hvm_resume_frames;
-EXPORT_SYMBOL_GPL(xen_hvm_resume_frames);
+struct grant_frames xen_auto_xlat_grant_frames;
+EXPORT_SYMBOL_GPL(xen_auto_xlat_grant_frames);
 
 static union {
 	struct grant_entry_v1 *v1;
@@ -838,6 +838,40 @@ unsigned int gnttab_max_grant_frames(void)
 }
 EXPORT_SYMBOL_GPL(gnttab_max_grant_frames);
 
+int gnttab_setup_auto_xlat_frames(unsigned long addr)
+{
+	xen_pfn_t *pfn;
+	unsigned int max_nr_gframes = __max_nr_grant_frames();
+	int i;
+
+	if (xen_auto_xlat_grant_frames.count)
+		return -EINVAL;
+
+	pfn = kcalloc(max_nr_gframes, sizeof(pfn[0]), GFP_KERNEL);
+	if (!pfn)
+		return -ENOMEM;
+	for (i = 0; i < max_nr_gframes; i++)
+		pfn[i] = PFN_DOWN(addr + (i * PAGE_SIZE));
+
+	xen_auto_xlat_grant_frames.vaddr = addr;
+	xen_auto_xlat_grant_frames.pfn = pfn;
+	xen_auto_xlat_grant_frames.count = max_nr_gframes;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(gnttab_setup_auto_xlat_frames);
+
+void gnttab_free_auto_xlat_frames(void)
+{
+	if (!xen_auto_xlat_grant_frames.count)
+		return;
+	kfree(xen_auto_xlat_grant_frames.pfn);
+	xen_auto_xlat_grant_frames.pfn = NULL;
+	xen_auto_xlat_grant_frames.count = 0;
+	xen_auto_xlat_grant_frames.vaddr = 0;
+}
+EXPORT_SYMBOL_GPL(gnttab_free_auto_xlat_frames);
+
 /* Handling of paged out grant targets (GNTST_eagain) */
 #define MAX_DELAY 256
 static inline void
@@ -1068,6 +1102,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 		struct xen_add_to_physmap xatp;
 		unsigned int i = end_idx;
 		rc = 0;
+		BUG_ON(xen_auto_xlat_grant_frames.count < nr_gframes);
 		/*
 		 * Loop backwards, so that the first hypercall has the largest
 		 * index, ensuring that the table will grow only once.
@@ -1076,7 +1111,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 			xatp.domid = DOMID_SELF;
 			xatp.idx = i;
 			xatp.space = XENMAPSPACE_grant_table;
-			xatp.gpfn = (xen_hvm_resume_frames >> PAGE_SHIFT) + i;
+			xatp.gpfn = xen_auto_xlat_grant_frames.pfn[i];
 			rc = HYPERVISOR_memory_op(XENMEM_add_to_physmap, &xatp);
 			if (rc != 0) {
 				pr_warn("grant table add_to_physmap failed, err=%d\n",
@@ -1175,11 +1210,11 @@ static int gnttab_setup(void)
 
 	if (xen_feature(XENFEAT_auto_translated_physmap) && gnttab_shared.addr == NULL)
 	{
-		gnttab_shared.addr = xen_remap(xen_hvm_resume_frames,
+		gnttab_shared.addr = xen_remap(xen_auto_xlat_grant_frames.vaddr,
 					       PAGE_SIZE * max_nr_gframes);
 		if (gnttab_shared.addr == NULL) {
 			pr_warn("Failed to ioremap gnttab share frames (addr=0x%08lx)!\n",
-					xen_hvm_resume_frames);
+					xen_auto_xlat_grant_frames.vaddr);
 			return -ENOMEM;
 		}
 	}
