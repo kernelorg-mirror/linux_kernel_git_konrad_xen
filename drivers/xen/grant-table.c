@@ -1098,7 +1098,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 	unsigned int nr_gframes = end_idx + 1;
 	int rc;
 
-	if (xen_hvm_domain()) {
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
 		struct xen_add_to_physmap xatp;
 		unsigned int i = end_idx;
 		rc = 0;
@@ -1174,7 +1174,7 @@ static void gnttab_request_version(void)
 	int rc;
 	struct gnttab_set_version gsv;
 
-	if (xen_hvm_domain())
+	if (xen_feature(XENFEAT_auto_translated_physmap))
 		gsv.version = 1;
 	else
 		gsv.version = 2;
@@ -1210,8 +1210,11 @@ static int gnttab_setup(void)
 
 	if (xen_feature(XENFEAT_auto_translated_physmap) && gnttab_shared.addr == NULL)
 	{
-		gnttab_shared.addr = xen_remap(xen_auto_xlat_grant_frames.vaddr,
-					       PAGE_SIZE * max_nr_gframes);
+		if (xen_hvm_domain()) {
+			gnttab_shared.addr = xen_remap(xen_auto_xlat_grant_frames.vaddr,
+						       PAGE_SIZE * max_nr_gframes);
+		} else
+			gnttab_shared.addr = xen_auto_xlat_grant_frames.vaddr;
 		if (gnttab_shared.addr == NULL) {
 			pr_warn("Failed to ioremap gnttab share frames (addr=0x%08lx)!\n",
 					xen_auto_xlat_grant_frames.vaddr);
@@ -1320,4 +1323,4 @@ static int __gnttab_init(void)
 	return gnttab_init();
 }
 
-core_initcall(__gnttab_init);
+core_initcall_sync(__gnttab_init);
