@@ -8,7 +8,7 @@
  *
  * Author: Ryan Wilson <hap9@epoch.ncsc.mil>
  */
-
+#define DEBUG 1
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
