@@ -296,8 +296,6 @@ void pcistub_put_pci_dev(struct pci_dev *dev)
 	 */
 	pcistub_reset_pci_dev(dev);
 
-	xen_pcibk_config_free_dyn_fields(dev);
-
 	xen_unregister_device_domain_owner(dev);
 
 	spin_lock_irqsave(&found_psdev->lock, flags);
