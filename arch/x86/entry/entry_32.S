@@ -308,7 +308,8 @@ sysenter_past_esp:
 
 	movl	%esp, %eax
 	call	do_fast_syscall_32
-	testl	%eax, %eax
+	/* XEN PV guests always use IRET path */
+	ALTERNATIVE "testl %eax, %eax", "xor %eax, %eax", X86_FEATURE_XENPV
 	jz	.Lsyscall_32_done
 
 /* Opportunistic SYSEXIT */

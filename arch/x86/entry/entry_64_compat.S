@@ -121,7 +121,8 @@ sysenter_flags_fixed:
 
 	movq	%rsp, %rdi
 	call	do_fast_syscall_32
-	testl	%eax, %eax
+	/* XEN PV guests always use IRET path */
+	ALTERNATIVE "testl %eax, %eax", "xor %eax, %eax", X86_FEATURE_XENPV
 	jz	.Lsyscall_32_done
 	jmp	sysret32_from_system_call
 
@@ -200,7 +201,8 @@ ENTRY(entry_SYSCALL_compat)
 
 	movq	%rsp, %rdi
 	call	do_fast_syscall_32
-	testl	%eax, %eax
+	/* XEN PV guests always use IRET path */
+	ALTERNATIVE "testl %eax, %eax", "xor %eax, %eax", X86_FEATURE_XENPV
 	jz	.Lsyscall_32_done
 
 	/* Opportunistic SYSRET */
