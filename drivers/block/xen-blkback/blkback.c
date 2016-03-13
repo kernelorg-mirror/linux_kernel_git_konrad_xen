@@ -155,7 +155,7 @@ static void put_free_pages(struct xen_blkif_ring *ring, struct page **page,
 	spin_unlock_irqrestore(&ring->free_pages_lock, flags);
 }
 
-static inline void shrink_free_pagepool(struct xen_blkif_ring *ring, int num)
+static void shrink_free_pagepool(struct xen_blkif_ring *ring, int num)
 {
 	/* Remove requested pages in batches of NUM_BATCH_FREE_PAGES */
 	struct page *page[NUM_BATCH_FREE_PAGES];
