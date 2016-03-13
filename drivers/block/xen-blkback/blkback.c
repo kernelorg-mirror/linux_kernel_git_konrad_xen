@@ -142,7 +142,7 @@ static inline int get_free_page(struct xen_blkif_ring *ring, struct page **page)
 	return 0;
 }
 
-static inline void put_free_pages(struct xen_blkif_ring *ring, struct page **page,
+static void put_free_pages(struct xen_blkif_ring *ring, struct page **page,
                                   int num)
 {
 	unsigned long flags;
